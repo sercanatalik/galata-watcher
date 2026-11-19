@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::io;
 
+use futures_util::stream::{self, StreamExt, TryStreamExt};
 use galata_desk_core::venue::{Info, Position, Transport, VenueError};
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +25,9 @@ use crate::state::{OVERLAP_MS, State};
 const PAGE: usize = 2_000;
 /// Pages read in one check before giving up on catching up further.
 const MAX_PAGES: usize = 5;
+/// Dexes asked for positions at once. Testnet lists hundreds of dexes, and
+/// asking them one by one took 80 s, longer than the minute between checks.
+const DEXES_AT_ONCE: usize = 8;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CheckError {
@@ -65,12 +69,17 @@ pub fn load_config(paths: &Paths) -> Result<Config, CheckError> {
 
 /// Every open position, on every perpetuals dex.
 pub async fn positions<T: Transport>(info: &Info<T>, user: &str) -> Result<Vec<Position>, VenueError> {
-    let mut out = Vec::new();
-    for dex in info.perp_dexs().await? {
-        let state = info.clearinghouse_state(user, &dex).await?;
-        out.extend(state.asset_positions.into_iter().map(|p| p.position).filter(|p| !p.szi.is_zero()));
-    }
-    Ok(out)
+    let dexes = info.perp_dexs().await?;
+    let states: Vec<_> = stream::iter(dexes.iter().map(|dex| info.clearinghouse_state(user, dex)))
+        .buffered(DEXES_AT_ONCE)
+        .try_collect()
+        .await?;
+    Ok(states
+        .into_iter()
+        .flat_map(|s| s.asset_positions)
+        .map(|p| p.position)
+        .filter(|p| !p.szi.is_zero())
+        .collect())
 }
 
 /// Check the account once, as of `now_ms`.

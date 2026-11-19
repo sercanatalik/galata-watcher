@@ -12,6 +12,7 @@ rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
 jiff = { version = "1.0.1", features = ["tzdb-bundle-always"] }
 
 [dev-dependencies]

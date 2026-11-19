@@ -4,8 +4,12 @@
 //! galata-watcher-api --data /data --bind 0.0.0.0:8790 [--token-file /run/secrets/api_token]
 //! ```
 //!
-//! Bind it to a LAN or Tailscale address only. It is never published to the
-//! internet.
+//! Bind it to loopback, a LAN or a Tailscale address only. It is never
+//! published to the internet.
+//!
+//! It stops on SIGTERM or SIGINT, after finishing the requests in flight. In a
+//! container it runs as PID 1, which the kernel never terminates by default,
+//! so without this a stop would wait for a SIGKILL.
 
 use std::process::ExitCode;
 
@@ -27,6 +31,17 @@ fn parse_args() -> Result<(String, String, String), String> {
         }
     }
     Ok((data.ok_or("--data is required")?, bind, token_file))
+}
+
+/// Resolves on the first SIGTERM (launchd, `container stop`, `docker stop`)
+/// or SIGINT (Ctrl-C).
+async fn stop_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = signal(SignalKind::terminate()).expect("install the SIGTERM handler");
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = tokio::signal::ctrl_c() => {}
+    }
 }
 
 #[tokio::main]
@@ -57,8 +72,12 @@ async fn main() -> ExitCode {
         }
     };
     eprintln!("galata-watcher-api listening on {bind}");
-    match axum::serve(listener, router(App::new(Paths::new(data), token))).await {
-        Ok(()) => ExitCode::SUCCESS,
+    let serve = axum::serve(listener, router(App::new(Paths::new(data), token))).with_graceful_shutdown(stop_signal());
+    match serve.await {
+        Ok(()) => {
+            eprintln!("galata-watcher-api stopped");
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("{e}");
             ExitCode::from(1)

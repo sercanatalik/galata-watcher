@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  galata-watcher's lane on this Mac, under Apple container (design decision 11).
+  A template: launchd/install.sh replaces @ROOT@ with the checkout's path and
+  copies it to ~/Library/LaunchAgents. No secret goes in here; a plist is
+  readable by every user on the machine. The service reads its own from
+  var/secrets/lane/.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.galata.watcher.lane</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@ROOT@/scripts/run-container.sh</string>
+    <string>lane</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>@ROOT@</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <!-- A refused start (missing image or secret) is retried at this pace, not in a tight loop. -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <!-- container run passes SIGTERM on; give the service time to finish what it is doing. -->
+  <key>ExitTimeOut</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>@ROOT@/var/logs/lane.log</string>
+  <key>StandardErrorPath</key>
+  <string>@ROOT@/var/logs/lane.log</string>
+</dict>
+</plist>
