@@ -1,0 +1,5 @@
+# Where the lane finds the release binaries and the data volume. These are
+# the container's paths; a development checkout points them elsewhere.
+[paths]
+bin = "/usr/local/bin"
+data = "/data"

@@ -1,0 +1,28 @@
+# The scheduling lane: cereyan flows that check the account every minute,
+# send the daily digest, and turn alerts into messages. Not a crate.
+#
+# **Thin by rule.** Every flow and rule only spawns this tree's release
+# binaries; nothing here talks to the network, reads the environment or
+# works out a figure. `scripts/check-python-flows.sh` holds the rule.
+#
+# cereyan is capped below 3: the lane leans on 2.x's `Cron`, code rules and
+# `after_consecutive`, and a major bump is where those move.
+
+[project]
+name = "galata-watcher-lane"
+version = "0.1.0"
+description = "The schedule and alert rules of galata-watcher"
+requires-python = ">=3.11"
+dependencies = ["cereyan>=2.3.1,<3"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = ["*.py"]
+python_functions = ["a_*", "an_*", "the_*", "every_*", "no_*", "two_*", "three_*"]

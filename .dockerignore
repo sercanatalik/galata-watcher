@@ -1,0 +1,6 @@
+target
+var
+secrets
+lane/.venv
+**/__pycache__
+.git

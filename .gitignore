@@ -1,0 +1,6 @@
+/target
+/var
+.venv/
+__pycache__/
+*.pyc
+secrets/

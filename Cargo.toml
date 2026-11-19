@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/galata-watcher",
+    "crates/galata-watcher-poll",
+    "crates/galata-watcher-api",
+    "crates/galata-notify",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/sercanatalik/galata-watcher"
+version = "0.1.0"
+
+[workspace.dependencies]
+galata-watcher = { path = "crates/galata-watcher" }
+# Pinned: the venue client, fill and order types. Bumping it is one line.
+galata-desk-core = { git = "https://github.com/sercanatalik/galata-desk", rev = "79ddba6a23a1d2e93226f141c1e071df0315bd80" }
+rust_decimal = { version = "1.43.0", features = ["serde-with-str"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }
+tempfile = "3.27.0"

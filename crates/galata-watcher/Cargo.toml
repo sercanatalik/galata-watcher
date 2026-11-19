@@ -1,0 +1,19 @@
+[package]
+name = "galata-watcher"
+description = "What galata-watcher alerts on: config, state, fill classification, levels, near-liquidation and message text."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+galata-desk-core.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+jiff = { version = "1.0.1", features = ["tzdb-bundle-always"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true

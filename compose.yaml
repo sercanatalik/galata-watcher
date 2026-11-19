@@ -1,0 +1,40 @@
+# galata-watcher on the NAS: the lane and the API, from one image, sharing
+# the data volume. Only the API has a port, and only on the address in
+# WATCHER_API_HOST (a LAN or Tailscale address of the NAS; loopback if
+# unset). cereyan's scheduler UI is published nowhere.
+#
+#   WATCHER_API_HOST=100.x.y.z docker compose up -d --build
+
+services:
+  lane:
+    build: .
+    image: galata-watcher:latest
+    restart: unless-stopped
+    volumes:
+      - data:/data
+    secrets:
+      - telegram_token
+
+  api:
+    image: galata-watcher:latest
+    restart: unless-stopped
+    command: ["galata-watcher-api", "--data", "/data", "--bind", "0.0.0.0:8790"]
+    ports:
+      - "${WATCHER_API_HOST:-127.0.0.1}:8790:8790"
+    volumes:
+      - data:/data
+    secrets:
+      - api_token
+    depends_on:
+      - lane
+
+secrets:
+  # Mode 0600, owned by uid 10001 (the image's `watcher` user), outside
+  # version control. See the README's deployment section.
+  telegram_token:
+    file: ./secrets/telegram_token
+  api_token:
+    file: ./secrets/api_token
+
+volumes:
+  data:
