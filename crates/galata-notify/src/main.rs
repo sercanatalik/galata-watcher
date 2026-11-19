@@ -49,6 +49,8 @@ struct Args {
     backoff: Duration,
 }
 
+const USAGE: &str = "usage: galata-notify --data DIR (--alert-id ID < message | --liveness broken|ok) [--token-file PATH]";
+
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut data = None;
     let mut alert_id = None;
@@ -68,7 +70,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--backoff-ms" => {
                 backoff = Duration::from_millis(value("--backoff-ms")?.parse().map_err(|_| "--backoff-ms takes milliseconds")?)
             }
-            other => return Err(format!("unknown argument `{other}`")),
+            "--help" | "-h" => return Err(USAGE.into()),
+            other => return Err(format!("unknown argument `{other}`\n{USAGE}")),
         }
     }
     let mode = match (alert_id, liveness.as_deref()) {
@@ -259,7 +262,7 @@ async fn main() -> ExitCode {
     match parse_args(std::env::args().skip(1)) {
         Ok(args) => run(args).await,
         Err(e) => {
-            eprintln!("{e}\nusage: galata-notify --data DIR (--alert-id ID < message | --liveness broken|ok)");
+            eprintln!("{e}");
             ExitCode::from(2)
         }
     }

@@ -137,7 +137,9 @@ curl -X PUT http://<NAS address>:8790/config \
   -d '{"address": "0x…", "network": "testnet", "telegram_chat": "<chat id>"}'
 ```
 
-Within a minute, `GET /health` should report a `last_ok_ms`.
+Within a minute, `GET /health` should report a `last_ok_ms`. If the
+digest time has already passed that day, the day's digest arrives on Telegram
+within five minutes: the first sign that delivery works.
 
 **Looking at the lane.** cereyan's UI is published nowhere. Its CLI works
 from inside the container:
