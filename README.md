@@ -20,6 +20,7 @@ places, amends or cancels an order.
 
 > **Status: 0.x.** It runs today on a Mac under Apple `container`. A Docker
 > Compose deployment for an always-on NAS is written but not yet verified.
+> Full documentation: <https://sercanatalik.github.io/galata-watcher/>
 
 Part of the Galata trading framework.
 [galata-desk](https://github.com/sercanatalik/galata-desk), the desktop app,

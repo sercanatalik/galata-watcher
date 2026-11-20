@@ -1,0 +1,14 @@
+[book]
+title = "galata-watcher"
+description = "An always-on watcher for one Hyperliquid account, with Telegram alerts."
+authors = ["Sercan Atalik"]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/sercanatalik/galata-watcher"
+edit-url-template = "https://github.com/sercanatalik/galata-watcher/edit/main/docs/{path}"
+site-url = "/galata-watcher/"
+default-theme = "navy"
+preferred-dark-theme = "navy"
+no-section-label = true
