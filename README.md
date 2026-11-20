@@ -79,7 +79,7 @@ A change is used from the next check, within a minute, with no restart.
 **The configuration.** `version` and each level's `generation` are set by
 the API, and a writer's values for them are ignored. Leaving out
 `near_liquidation_pct` (2 to 50, default 15), `network`, `digest`,
-`stop_alerts` or `levels` gives the default. Liquidation and
+`stop_alerts`, `pnl_summary` or `levels` gives the default. Liquidation and
 near-liquidation alerts have no off switch, and a field that tries to add
 one is refused.
 
@@ -92,6 +92,7 @@ one is refused.
   "near_liquidation_pct": "15",
   "digest": { "time": "07:00", "zone": "Europe/Istanbul" },
   "stop_alerts": true,
+  "pnl_summary": true,
   "levels": [
     { "id": "btc-support", "market": "BTC", "price": "58000", "direction": "below", "note": "weekly support" },
     { "market": "xyz:NVDA", "price": "210", "direction": "above" }
@@ -107,6 +108,10 @@ without an `id` gets one from its market, direction and price.
 **Stop alerts.** `stop_alerts` switches take-profit and stop-loss alerts on
 or off for every ticker at once. When on, each TP or SL order that fills
 sends one alert, with its size and average price.
+
+**PnL summary.** `pnl_summary` switches the half-hourly PnL summary on or
+off; it is on when left out. While it is off no summary is sent, and a slot
+that passed while it was off is not sent later.
 
 ## The Telegram bot
 

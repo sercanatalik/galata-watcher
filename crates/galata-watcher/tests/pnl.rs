@@ -97,3 +97,16 @@ async fn a_venue_failure_saves_nothing() {
     assert!(pnl::run(&info, &paths, now).await.is_err());
     assert!(files::read_json::<Sent>(&paths.pnl()).unwrap().is_none());
 }
+
+#[tokio::test]
+async fn switched_off_nothing_is_asked_and_nothing_saved() {
+    let (_d, paths) = data();
+    let mut config: serde_json::Value = files::read_json(&paths.config()).unwrap().unwrap();
+    config["pnl_summary"] = json!(false);
+    files::write_json(&paths.config(), &config).unwrap();
+    let now = CANDLE_05_00 + DAY + 2 * 60_000; // 14:02 in Tokyo, a due slot
+    // A venue that is down: any question to it would fail the run.
+    let info = Info::new(Venue { down: true });
+    assert!(pnl::run(&info, &paths, now).await.unwrap().is_none());
+    assert!(files::read_json::<Sent>(&paths.pnl()).unwrap().is_none());
+}

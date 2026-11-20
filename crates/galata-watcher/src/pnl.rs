@@ -53,8 +53,12 @@ pub struct Outcome {
     pub sent: Sent,
 }
 
-/// The slot a summary is due for at `now_ms`, if one is due.
+/// The slot a summary is due for at `now_ms`, if one is due. None while
+/// the summary is switched off.
 pub fn due(config: &Config, sent: &Sent, now_ms: u64) -> Option<Slot> {
+    if !config.pnl_summary {
+        return None;
+    }
     let tz = TimeZone::get(&config.digest.zone).ok()?;
     let local = Timestamp::from_millisecond(now_ms as i64).ok()?.to_zoned_datetime(tz);
     let (h, m) = (local.hour(), local.minute());
@@ -225,6 +229,14 @@ mod tests {
         assert_eq!(due_id(&c, &none, "2026-11-21T06:30:05Z"), None, "06:30 is quiet");
         assert_eq!(due_id(&c, &none, "2026-11-21T07:00:05Z"), slot("2026-11-21T07:00"), "the first of the morning");
         assert_eq!(due(&c, &none, ms("2026-11-20T14:30:05Z")).unwrap().time, "14:30");
+    }
+
+    #[test]
+    fn nothing_is_due_while_switched_off() {
+        let mut c = cfg("Europe/London");
+        assert!(due(&c, &Sent::default(), ms("2026-11-20T14:00:05Z")).is_some());
+        c.pnl_summary = false;
+        assert_eq!(due_id(&c, &Sent::default(), "2026-11-20T14:00:05Z"), None);
     }
 
     #[test]

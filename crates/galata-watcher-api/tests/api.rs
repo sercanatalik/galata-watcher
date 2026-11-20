@@ -161,6 +161,39 @@ async fn switching_off_liquidation_alerts_is_422_naming_the_field() {
     assert!(body["problems"][0].as_str().unwrap().contains("`near_liquidation_alerts`"));
 }
 
+#[tokio::test]
+async fn a_config_json_without_the_pnl_summary_setting_reads_it_as_on() {
+    let api = Api::new();
+    let mut doc = config();
+    doc["version"] = json!(1);
+    let mut stored = serde_json::to_value(galata_watcher::config::check(&doc).unwrap().config).unwrap();
+    stored.as_object_mut().unwrap().remove("pnl_summary");
+    files::write_json(&api.paths.config(), &stored).unwrap();
+    assert_eq!(api.get("/config").await.2["pnl_summary"], true);
+}
+
+#[tokio::test]
+async fn the_pnl_summary_can_be_switched_off_and_read_back() {
+    let api = Api::with_config(1);
+    let mut doc = config();
+    doc["pnl_summary"] = json!(false);
+    let (status, _, _) = api.put(Some("\"1\""), doc).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, read) = api.get("/config").await;
+    assert_eq!((read["pnl_summary"].clone(), read["version"].clone()), (json!(false), json!(2)));
+}
+
+#[tokio::test]
+async fn a_pnl_summary_setting_that_is_not_a_switch_is_422_naming_it() {
+    let api = Api::with_config(1);
+    let mut doc = config();
+    doc["pnl_summary"] = json!("sometimes");
+    let (status, _, body) = api.put(Some("\"1\""), doc).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["problems"][0].as_str().unwrap().starts_with("`pnl_summary`"));
+    assert_eq!(api.get("/config").await.2["version"], 1);
+}
+
 fn fired_at_0312(api: &Api, generation: u64) {
     let mut s = State::default();
     s.fired.insert("btc-58k".into(), Fired { generation, at_ms: 1_795_057_920_000 });

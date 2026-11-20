@@ -105,6 +105,9 @@ pub struct Config {
     /// set to `false`.
     #[serde(default = "on", deserialize_with = "stop_switch")]
     pub stop_alerts: bool,
+    /// The half-hourly PnL summary. On unless set to `false`.
+    #[serde(default = "on")]
+    pub pnl_summary: bool,
     #[serde(default)]
     pub levels: Vec<Level>,
 }
@@ -153,6 +156,7 @@ const TOP_KEYS: &[&str] = &[
     "near_liquidation_pct",
     "digest",
     "stop_alerts",
+    "pnl_summary",
     "levels",
 ];
 const LEVEL_KEYS: &[&str] = &[
@@ -260,6 +264,15 @@ pub fn check(doc: &Value) -> Result<Checked, Vec<String>> {
         }
     };
 
+    let pnl_summary = match obj.get("pnl_summary") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => {
+            problems.push("`pnl_summary`: must be true or false".into());
+            true
+        }
+    };
+
     let mut levels = Vec::new();
     let mut stated = BTreeMap::new();
     match obj.get("levels") {
@@ -289,6 +302,7 @@ pub fn check(doc: &Value) -> Result<Checked, Vec<String>> {
                 near_liquidation_pct,
                 digest,
                 stop_alerts,
+                pnl_summary,
                 levels,
             },
             stated,
@@ -426,6 +440,21 @@ mod tests {
         assert!(check(&doc).unwrap().config.stop_alerts, "an earlier watcher's empty map");
         doc["stop_alerts"] = json!({"SOL": false});
         assert_eq!(check(&doc).unwrap_err(), ["`stop_alerts`: must be true or false"]);
+    }
+
+    #[test]
+    fn the_pnl_summary_is_one_switch_on_by_default() {
+        let doc = valid();
+        assert!(check(&doc).unwrap().config.pnl_summary, "absent reads on");
+        let mut off = doc.clone();
+        off["pnl_summary"] = json!(false);
+        assert!(!check(&off).unwrap().config.pnl_summary);
+        off["pnl_summary"] = json!("sometimes");
+        assert_eq!(check(&off).unwrap_err(), ["`pnl_summary`: must be true or false"]);
+        let saved = serde_json::to_value(check(&doc).unwrap().config).unwrap();
+        let mut earlier = saved.clone();
+        earlier.as_object_mut().unwrap().remove("pnl_summary");
+        assert!(serde_json::from_value::<Config>(earlier).unwrap().pnl_summary, "a config.json without it");
     }
 
     #[test]
