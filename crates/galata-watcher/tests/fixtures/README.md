@@ -14,3 +14,4 @@ fills that shared a hash sharing one.
 | `userFills_liquidation.json` | Six liquidation fills from three accounts (`dir` stays `Close Long`; a `liquidation` object marks them), all with `liquidatedUser` set to the watched account. The last row is **synthetic**: a copy of the first with `liquidatedUser` set to another account, `tid` 1, `dir` `Open Long`, standing for the liquidator's side of a fill. |
 | `clearinghouseState.json` | Copied from galata-desk-core's fixtures: a perps state with positions and `liquidationPx`. |
 | `candleSnapshot_BTC.json` | Copied from galata-desk-core's fixtures: BTC candles. |
+| `portfolio.json` | Copied from galata-desk-core's fixtures: an account's PnL and value history for `day`, `week`, `month`, `allTime` and the `perp` versions. |

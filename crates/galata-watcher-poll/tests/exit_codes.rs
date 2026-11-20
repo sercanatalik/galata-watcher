@@ -148,3 +148,78 @@ fn an_unknown_argument_exits_2() {
     let out = Command::new(env!("CARGO_BIN_EXE_galata-watcher-poll")).arg("--bogus").output().unwrap();
     assert_eq!(out.status.code(), Some(2));
 }
+
+/// A venue with no positions and a recorded-looking PnL history.
+fn venue_for_a_summary(req: &Value) -> Option<Value> {
+    let window = |pnl: &str| json!({"accountValueHistory": [[0, "1"]], "pnlHistory": [[0, "0"], [1, pnl]], "vlm": "0"});
+    Some(match req["type"].as_str()? {
+        "perpDexs" => json!([null]),
+        "clearinghouseState" => json!({"marginSummary": {"accountValue": "0", "totalNtlPos": "0", "totalMarginUsed": "0"},
+            "withdrawable": "0", "assetPositions": []}),
+        "portfolio" => json!([["day", window("1234.6")], ["month", window("-4102.2")], ["allTime", window("18870")]]),
+        "userFillsByTime" | "userFunding" => json!([]),
+        _ => return None,
+    })
+}
+
+/// A fixed-offset zone whose local hour is `hour` now.
+fn zone_at(hour: i64) -> String {
+    let utc_hour = (now_ms() / 3_600_000 % 24) as i64;
+    let offset = (hour - utc_hour + 36) % 24 - 12; // -12..=11
+    // Etc/GMT names are sign-inverted: Etc/GMT-3 is UTC+3.
+    match offset {
+        0 => "Etc/GMT".into(),
+        o if o > 0 => format!("Etc/GMT-{o}"),
+        o => format!("Etc/GMT+{}", -o),
+    }
+}
+
+fn poll_pnl(dir: &tempfile::TempDir, url: &str) -> (i32, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_galata-watcher-poll"))
+        .args(["--data", dir.path().to_str().unwrap(), "--info-url", url, "--pnl"])
+        .env_clear()
+        .output()
+        .unwrap();
+    (out.status.code().unwrap(), String::from_utf8(out.stdout).unwrap())
+}
+
+fn summary_config(zone: &str) -> Value {
+    json!({"address": ME, "telegram_chat": "1", "digest": {"time": "07:00", "zone": zone}})
+}
+
+#[test]
+fn a_summary_in_quiet_hours_exits_3() {
+    let dir = data(summary_config(&zone_at(2)));
+    let url = serve(venue_for_a_summary);
+    assert_eq!(poll_pnl(&dir, &url), (3, String::new()));
+}
+
+/// Exit 0 needs the wall clock inside a slot's first ten minutes, which no
+/// zone can arrange; outside them the run must exit 3. The 0 path itself is
+/// covered without a clock by galata-watcher's `tests/pnl.rs`.
+#[test]
+fn a_due_summary_prints_one_alert_and_exits_0_then_3() {
+    let dir = data(summary_config(&zone_at(12)));
+    let url = serve(venue_for_a_summary);
+    let in_grace = now_ms() / 60_000 % 30 < 9;
+    let (code, out) = poll_pnl(&dir, &url);
+    if !in_grace {
+        assert_eq!((code, out.as_str()), (3, ""), "past the slot's grace");
+        return;
+    }
+    assert_eq!(code, 0);
+    let line: Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(line["kind"], "pnl_summary");
+    assert!(line["id"].as_str().unwrap().starts_with("pnl-"));
+    assert!(line["text"].as_str().unwrap().contains("24h +$1,235\n30D -$4,102\nAll-time +$18,870"));
+    assert_eq!(poll_pnl(&dir, &url), (3, String::new()), "once per slot");
+}
+
+#[test]
+fn digest_and_pnl_together_exit_2() {
+    let out = Command::new(env!("CARGO_BIN_EXE_galata-watcher-poll"))
+        .args(["--data", "/nonexistent", "--digest", "--pnl"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+}

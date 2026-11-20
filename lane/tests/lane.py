@@ -6,6 +6,7 @@ import pytest
 
 from flows import _runner
 from flows.digest import send_the_digest
+from flows.pnl import send_the_pnl_summary
 from flows.watch import watch_the_account
 
 from conftest import alert_line
@@ -89,6 +90,29 @@ def a_digest_not_yet_due_sends_nothing(tools):
     tools.acts("galata-watcher-poll", (3, ""))
     assert send_the_digest() == "not due"
     assert tools.calls("galata-notify") == []
+
+
+def the_pnl_summary_is_sent_through_the_alert_rule_when_due(tools):
+    tools.acts("galata-watcher-poll", (0, alert_line("pnl-2026-11-20T14:30", "pnl_summary", "PnL summary")))
+    assert send_the_pnl_summary() == "sent"
+    [call] = tools.calls("galata-watcher-poll")
+    assert call["argv"] == ["--data", str(_runner.DATA), "--pnl"]
+    sent = [c for c in tools.calls("galata-notify") if "--alert-id" in c["argv"]]
+    assert [c["argv"][c["argv"].index("--alert-id") + 1] for c in sent] == ["pnl-2026-11-20T14:30"]
+    assert [c["stdin"] for c in sent] == ["PnL summary"]
+
+
+def a_pnl_summary_not_due_sends_nothing(tools):
+    tools.acts("galata-watcher-poll", (3, ""))
+    assert send_the_pnl_summary() == "not due"
+    assert tools.calls("galata-notify") == []
+
+
+def the_pnl_summary_runs_on_the_hour_and_half_hour():
+    from cereyan import Cron
+    from flows.pnl import SCHEDULE
+
+    assert SCHEDULE == Cron("*/30 * * * *", timezone="UTC")
 
 
 def the_rules_carry_the_guards_the_design_names():

@@ -106,3 +106,46 @@ fn a_liquidation_reads_market_side_size_and_price() {
     let t = galata_watcher::alert::liquidation_text("BTC", true, "1.6".parse().unwrap(), "62151".parse().unwrap(), false, 0);
     assert_eq!(t, "BTC long LIQUIDATED: 1.6 at 62,151");
 }
+
+#[test]
+fn no_pnl_summary_names_the_address_or_the_account_value() {
+    let text = std::fs::read_to_string(format!("{}/tests/fixtures/clearinghouseState.json", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let state: ClearinghouseState = serde_json::from_str(&text).unwrap();
+    let positions: Vec<Position> = state.asset_positions.into_iter().map(|p| p.position).collect();
+    let value = state.margin_summary.account_value;
+    // As a figure would read in any of the watcher's formats.
+    let forms = [galata_watcher::alert::amount(value), galata_watcher::daypnl::usd(value)[1..].to_string()];
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+
+    for _ in 0..300 {
+        let windows = galata_watcher::pnl::Windows {
+            day: maybe_signed(&mut rng, 100_000),
+            month: maybe_signed(&mut rng, 100_000),
+            all_time: maybe_signed(&mut rng, 100_000),
+        };
+        let mut held = Vec::new();
+        let mut pnl = HashMap::new();
+        for p in &positions {
+            if rng.below(2) == 0 {
+                held.push(p.clone());
+                if let Some(d) = maybe_signed(&mut rng, 10_000) {
+                    pnl.insert(p.coin.clone(), d);
+                }
+            }
+        }
+        let t = galata_watcher::pnl::text("14:30", &windows, &held, &pnl);
+        assert!(!t.to_lowercase().contains(&ME[2..]), "{t}");
+        for f in &forms {
+            assert!(!t.contains(f.as_str()), "{t} contains the account value {f}");
+        }
+    }
+}
+
+/// A signed amount up to `max`, or now and then none.
+fn maybe_signed(rng: &mut Rng, max: u64) -> Option<Decimal> {
+    if rng.below(5) == 0 {
+        return None;
+    }
+    let d = rng.dec(max);
+    Some(if rng.below(2) == 0 { d } else { -d })
+}

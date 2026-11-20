@@ -1,8 +1,10 @@
 //! An alert, and the words it is sent in.
 //!
 //! The text names the market, the event, side, size and prices, and for a
-//! level the trader's own note. Nothing else reaches it: no account value,
-//! balance, address, key or token, because nothing else is passed in.
+//! level the trader's own note. The digest adds each position's 24-hour PnL,
+//! and the PnL summary the account's PnL over 24h, 30D and all time. Nothing
+//! else reaches it: no account value, balance, address, key or token, because
+//! nothing else is passed in.
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -24,6 +26,8 @@ pub enum Kind {
     NearLiquidation,
     Level,
     Digest,
+    /// The half-hourly PnL summary.
+    PnlSummary,
 }
 
 impl Kind {
@@ -217,5 +221,6 @@ mod tests {
     fn event_names_follow_the_kind() {
         assert_eq!(Kind::StopLoss.event_name(), "account.stop_loss");
         assert_eq!(Kind::NearLiquidation.event_name(), "account.near_liquidation");
+        assert_eq!(Kind::PnlSummary.event_name(), "account.pnl_summary");
     }
 }

@@ -32,6 +32,10 @@ impl Paths {
     pub fn digest(&self) -> PathBuf {
         self.root.join("digest.json")
     }
+    /// Written by the poll's PnL mode only: the last summary's slot.
+    pub fn pnl(&self) -> PathBuf {
+        self.root.join("pnl.json")
+    }
     /// Written by the poll only: the outcome of the latest check.
     pub fn health(&self) -> PathBuf {
         self.root.join("health.json")
