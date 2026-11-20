@@ -1,19 +1,50 @@
 # galata-watcher
 
-**An always-on watcher for one Hyperliquid account. It tells you on Telegram
-when a take-profit or stop-loss fills, when a position is liquidated or
-nears liquidation, and when a price crosses a level you set, even while your
-Mac is asleep. Every half hour through the day it also sends a PnL summary.**
+[![MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE-MIT)
+[![Rust 1.98+](https://img.shields.io/badge/rust-1.98%2B-b7410e.svg)](rust-toolchain.toml)
 
-It runs in two containers from one image: for now on a Mac under Apple
-`container`, later on a NAS under Docker. It only reads the account's public
-data. It holds no trading key and never places, amends or cancels an order.
+**An always-on watcher for one Hyperliquid account that tells you on
+Telegram when something happens, while the trading screen is closed.**
 
-Galata is a Rust trading framework. galata-watcher is the trading side's
-always-on half; [galata-desk](https://github.com/sercanatalik/galata-desk) is
-its screen and will configure it over this tree's API.
+It sends a message when:
 
----
+- a take-profit or stop-loss order fills;
+- a position is liquidated, or comes within a set distance of liquidation;
+- a price crosses a level you set.
+
+It also sends a daily digest and, every half hour through the day, a PnL
+summary.
+
+It only reads the account's public data. It holds no trading key and never
+places, amends or cancels an order.
+
+> **Status: 0.x.** It runs today on a Mac under Apple `container`. A Docker
+> Compose deployment for an always-on NAS is written but not yet verified.
+
+Part of the Galata trading framework.
+[galata-desk](https://github.com/sercanatalik/galata-desk), the desktop app,
+connects to this watcher's API: it draws the call levels on its charts and
+edits the levels, stop alerts and near-liquidation distance. Anything that
+can make an HTTP request can do the same.
+
+## Quick start (Mac)
+
+You need an Apple silicon Mac with
+[Apple container](https://github.com/apple/container) 1.7 or later, and a
+Telegram bot (see [The Telegram bot](#the-telegram-bot)).
+
+```sh
+git clone https://github.com/sercanatalik/galata-watcher
+cd galata-watcher
+container system start
+mkdir -p var/secrets/lane && chmod 700 var/secrets var/secrets/lane
+(umask 077 && printf '%s' '<bot token>' > var/secrets/lane/telegram_token)
+launchd/install.sh
+```
+
+Then write a first configuration through the API, as in
+[step 4 below](#running-on-a-mac-with-apple-container), and the alerts
+start within a minute.
 
 ## How it is built
 
