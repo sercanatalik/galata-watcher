@@ -6,6 +6,7 @@ language = "en"
 src = "src"
 
 [output.html]
+additional-css = ["theme/galata.css"]
 git-repository-url = "https://github.com/sercanatalik/galata-watcher"
 edit-url-template = "https://github.com/sercanatalik/galata-watcher/edit/main/docs/{path}"
 site-url = "/galata-watcher/"

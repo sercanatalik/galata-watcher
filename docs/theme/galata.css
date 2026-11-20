@@ -1,0 +1,15 @@
+/* The Galata tower beside the book's title. */
+.menu-title::before {
+  content: "";
+  display: inline-block;
+  width: 1.6em;
+  height: 1.6em;
+  margin-right: 0.4em;
+  vertical-align: -0.35em;
+  background: url("../images/logo.svg") center / contain no-repeat;
+}
+.navy .menu-title::before,
+.coal .menu-title::before,
+.ayu .menu-title::before {
+  background-image: url("../images/logo-on-dark.svg");
+}
