@@ -101,18 +101,31 @@ pub struct Config {
     pub near_liquidation_pct: Decimal,
     #[serde(default)]
     pub digest: Digest,
-    /// Take-profit and stop-loss alerts per ticker. A ticker not listed is on.
-    #[serde(default)]
-    pub stop_alerts: BTreeMap<String, bool>,
+    /// Take-profit and stop-loss fill alerts, for every ticker. On unless
+    /// set to `false`.
+    #[serde(default = "on", deserialize_with = "stop_switch")]
+    pub stop_alerts: bool,
     #[serde(default)]
     pub levels: Vec<Level>,
 }
 
-impl Config {
-    /// Whether take-profit and stop-loss alerts are on for `market`.
-    pub fn stop_alerts_on(&self, market: &str) -> bool {
-        self.stop_alerts.get(market).copied().unwrap_or(true)
+fn on() -> bool {
+    true
+}
+
+/// `true` or `false`. A `config.json` saved by an earlier watcher holds a
+/// map of tickers instead: it reads as on unless it switched one off.
+fn stop_switch<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either {
+        One(bool),
+        ByTicker(BTreeMap<String, bool>),
     }
+    Ok(match Either::deserialize(d)? {
+        Either::One(on) => on,
+        Either::ByTicker(m) => m.values().all(|on| *on),
+    })
 }
 
 /// What a writer said about a level's state, kept so the API can tell a
@@ -235,21 +248,17 @@ pub fn check(doc: &Value) -> Result<Checked, Vec<String>> {
         },
     };
 
-    let mut stop_alerts = BTreeMap::new();
-    match obj.get("stop_alerts") {
-        None | Some(Value::Null) => {}
-        Some(Value::Object(m)) => {
-            for (ticker, on) in m {
-                match on.as_bool() {
-                    Some(b) if !ticker.trim().is_empty() => {
-                        stop_alerts.insert(ticker.clone(), b);
-                    }
-                    _ => problems.push(format!("`stop_alerts.{ticker}`: must be true or false")),
-                }
-            }
+    let stop_alerts = match obj.get("stop_alerts") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        // Written by an earlier watcher, which set it per ticker. An empty
+        // map, the only kind it ever wrote by default, meant on.
+        Some(Value::Object(m)) if m.is_empty() => true,
+        Some(_) => {
+            problems.push("`stop_alerts`: must be true or false".into());
+            true
         }
-        Some(_) => problems.push("`stop_alerts`: must map tickers to true or false".into()),
-    }
+    };
 
     let mut levels = Vec::new();
     let mut stated = BTreeMap::new();
@@ -393,7 +402,7 @@ mod tests {
             "telegram_chat": "12345",
             "near_liquidation_pct": "15",
             "digest": {"time": "07:00", "zone": "Europe/Istanbul"},
-            "stop_alerts": {"SOL": false},
+            "stop_alerts": false,
             "levels": [{"id": "btc-58k", "market": "BTC", "price": "58000", "direction": "below", "note": "support"}]
         })
     }
@@ -403,10 +412,29 @@ mod tests {
         let c = check(&valid()).unwrap().config;
         assert_eq!(c.address, "0x00000000000000000000000000000000000000aa");
         assert_eq!(c.network, Network::Mainnet);
-        assert!(!c.stop_alerts_on("SOL"));
-        assert!(c.stop_alerts_on("ETH"), "a ticker with no setting is on");
+        assert!(!c.stop_alerts);
         assert_eq!(c.levels[0].generation, 0);
         assert_eq!(c.digest.hour_minute(), (7, 0));
+    }
+
+    #[test]
+    fn stop_alerts_are_one_switch_on_by_default() {
+        let mut doc = valid();
+        doc.as_object_mut().unwrap().remove("stop_alerts");
+        assert!(check(&doc).unwrap().config.stop_alerts);
+        doc["stop_alerts"] = json!({});
+        assert!(check(&doc).unwrap().config.stop_alerts, "an earlier watcher's empty map");
+        doc["stop_alerts"] = json!({"SOL": false});
+        assert_eq!(check(&doc).unwrap_err(), ["`stop_alerts`: must be true or false"]);
+    }
+
+    #[test]
+    fn a_config_json_saved_by_an_earlier_watcher_still_reads() {
+        let mut saved = serde_json::to_value(check(&valid()).unwrap().config).unwrap();
+        saved["stop_alerts"] = json!({});
+        assert!(serde_json::from_value::<Config>(saved.clone()).unwrap().stop_alerts);
+        saved["stop_alerts"] = json!({"SOL": false});
+        assert!(!serde_json::from_value::<Config>(saved).unwrap().stop_alerts);
     }
 
     #[test]

@@ -135,7 +135,7 @@ pub fn classify(fills: &[Fill], orders: Option<&HashMap<u64, OrderKind>>, config
         };
         out.handled.push((f.tid, f.time));
         let Some(kind) = kind else { continue };
-        if matches!(kind, Kind::TakeProfit | Kind::StopLoss) && !config.stop_alerts_on(&f.coin) {
+        if matches!(kind, Kind::TakeProfit | Kind::StopLoss) && !config.stop_alerts {
             continue;
         }
         let group = by_order.entry(f.oid).or_insert_with(|| {
@@ -244,7 +244,7 @@ mod tests {
         let orders: Vec<HistoricalOrder> = fixture("historicalOrders_triggers.json");
         let kinds = order_kinds(&orders);
         let now = fills.iter().map(|f| f.time).max().unwrap() + 30_000;
-        let out = classify(&fills, Some(&kinds), &cfg(json!({})), now);
+        let out = classify(&fills, Some(&kinds), &cfg(json!(true)), now);
 
         let triggered: Vec<_> = orders.iter().filter(|r| r.status == "triggered").collect();
         assert_eq!(out.alerts.len(), triggered.len(), "one alert per triggered order, none for the ordinary fills");
@@ -264,7 +264,7 @@ mod tests {
             fill(9, 2, 1_100, "1", "101"),
             fill(9, 3, 1_200, "2", "102"),
         ];
-        let out = classify(&fills, Some(&kinds(&[(9, "Take Profit Market", true)])), &cfg(json!({})), 2_000);
+        let out = classify(&fills, Some(&kinds(&[(9, "Take Profit Market", true)])), &cfg(json!(true)), 2_000);
         assert_eq!(out.alerts.len(), 1);
         let a = &out.alerts[0];
         assert_eq!(a.size, Some("4".parse().unwrap()));
@@ -274,14 +274,14 @@ mod tests {
 
     #[test]
     fn an_ordinary_limit_fill_is_not_alerted() {
-        let out = classify(&[fill(5, 1, 1_000, "1", "1")], Some(&kinds(&[(5, "Limit", false)])), &cfg(json!({})), 2_000);
+        let out = classify(&[fill(5, 1, 1_000, "1", "1")], Some(&kinds(&[(5, "Limit", false)])), &cfg(json!(true)), 2_000);
         assert!(out.alerts.is_empty());
         assert_eq!(out.handled, vec![(1, 1_000)]);
     }
 
     #[test]
     fn an_unknown_trigger_type_is_reported_unclassified() {
-        let out = classify(&[fill(5, 1, 1_000, "1", "2218")], Some(&kinds(&[(5, "Moon Trigger", true)])), &cfg(json!({})), 2_000);
+        let out = classify(&[fill(5, 1, 1_000, "1", "2218")], Some(&kinds(&[(5, "Moon Trigger", true)])), &cfg(json!(true)), 2_000);
         assert_eq!(out.alerts[0].kind, Kind::TriggerUnclassified);
         assert_eq!(out.alerts[0].text, "BTC trigger fill (unclassified): sold 1 at 2,218");
     }
@@ -296,32 +296,35 @@ mod tests {
     #[test]
     fn a_fill_of_an_unlisted_order_is_held_then_reported() {
         let f = [fill(77, 1, 1_000, "1", "1")];
-        let early = classify(&f, Some(&HashMap::new()), &cfg(json!({})), 1_000 + 60_000);
+        let early = classify(&f, Some(&HashMap::new()), &cfg(json!(true)), 1_000 + 60_000);
         assert!(early.alerts.is_empty() && early.handled.is_empty());
         assert_eq!(early.held_times, vec![1_000]);
 
-        let later = classify(&f, Some(&HashMap::new()), &cfg(json!({})), 1_000 + HOLD_MS);
+        let later = classify(&f, Some(&HashMap::new()), &cfg(json!(true)), 1_000 + HOLD_MS);
         assert_eq!(later.alerts[0].kind, Kind::FillUnclassified);
     }
 
     #[test]
-    fn a_switched_off_ticker_gets_no_stop_alert_and_a_new_ticker_does() {
+    fn switched_off_no_tp_or_sl_fill_is_alerted_and_switched_on_each_order_is() {
         let mut eth = fill(1, 1, 1_000, "1", "1");
         eth.coin = "ETH".into();
         let mut sol = fill(2, 2, 1_000, "1", "1");
         sol.coin = "SOL".into();
-        let orders = kinds(&[(1, "Stop Market", true), (2, "Stop Market", true)]);
-        let out = classify(&[eth, sol], Some(&orders), &cfg(json!({"SOL": false})), 2_000);
-        assert_eq!(out.alerts.len(), 1);
-        assert_eq!(out.alerts[0].market, "ETH");
-        assert_eq!(out.handled.len(), 2, "a switched-off fill is still handled, not re-read");
+        let orders = kinds(&[(1, "Stop Market", true), (2, "Take Profit Market", true)]);
+        let fills = [eth, sol];
+        let off = classify(&fills, Some(&orders), &cfg(json!(false)), 2_000);
+        assert!(off.alerts.is_empty());
+        assert_eq!(off.handled.len(), 2, "a switched-off fill is still handled, not re-read");
+        let on = classify(&fills, Some(&orders), &cfg(json!(true)), 2_000);
+        let kinds: Vec<_> = on.alerts.iter().map(|a| (a.market.as_str(), a.kind)).collect();
+        assert_eq!(kinds, [("ETH", Kind::StopLoss), ("SOL", Kind::TakeProfit)]);
     }
 
     #[test]
     fn the_recorded_liquidations_are_alerted_once_per_market_and_a_liquidators_fill_is_not() {
         let fills: Vec<Fill> = fixture("userFills_liquidation.json");
         let now = fills.iter().map(|f| f.time).max().unwrap() + 30_000;
-        let out = classify(&fills, None, &cfg(json!({"BTC": false})), now);
+        let out = classify(&fills, None, &cfg(json!(false)), now);
         assert!(!out.alerts.is_empty());
         assert!(out.alerts.iter().all(|a| a.kind == Kind::Liquidation));
         let markets: std::collections::BTreeSet<_> = out.alerts.iter().map(|a| &a.market).collect();
@@ -339,18 +342,18 @@ mod tests {
     }
 
     #[test]
-    fn a_liquidation_on_a_switched_off_ticker_is_still_alerted() {
+    fn a_liquidation_is_alerted_with_stop_alerts_off() {
         let mut f = fill(1, 1, 1_000, "1", "1");
         f.coin = "SOL".into();
         f.liquidation = Some(crate::fills::Liquidation { liquidated_user: ME.to_uppercase().replace("0X", "0x") });
-        let out = classify(&[f], None, &cfg(json!({"SOL": false})), 2_000);
+        let out = classify(&[f], None, &cfg(json!(false)), 2_000);
         assert_eq!(out.alerts.len(), 1);
         assert_eq!(out.alerts[0].kind, Kind::Liquidation);
     }
 
     #[test]
     fn an_event_found_more_than_three_minutes_late_is_marked_late() {
-        let out = classify(&[fill(9, 1, 0, "1", "1")], Some(&kinds(&[(9, "Stop Market", true)])), &cfg(json!({})), LATE_MS + 1);
+        let out = classify(&[fill(9, 1, 0, "1", "1")], Some(&kinds(&[(9, "Stop Market", true)])), &cfg(json!(true)), LATE_MS + 1);
         assert!(out.alerts[0].late);
         assert!(out.alerts[0].text.starts_with("[late: happened"));
     }
