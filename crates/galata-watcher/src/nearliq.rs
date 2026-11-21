@@ -74,8 +74,10 @@ pub fn check(positions: &[Position], threshold_pct: Decimal, sent: &mut BTreeMap
             event_ms: now_ms,
             detected_ms: now_ms,
             late: false,
-            text: alert::near_text(&d.market, d.mark, d.liquidation, d.pct),
-        });
+            text: String::new(),
+            html: None,
+        }
+        .with_message(&alert::near_message(&d.market, d.mark, d.liquidation, d.pct)));
     }
     out
 }

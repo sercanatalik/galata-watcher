@@ -1,6 +1,7 @@
 //! The PnL summary: every half hour outside the night, the account's PnL
 //! over the venue's rolling 24h, 30D and all-time windows, then each open
-//! position's 24-hour PnL.
+//! position's 24-hour PnL, then the account's last three trades as a
+//! reminder of what it did.
 //!
 //! The lane asks on the hour and the half hour. A summary is due when the
 //! local time (in the digest's zone) is within [`GRACE_MS`] of a slot's
@@ -12,17 +13,18 @@
 use std::collections::HashMap;
 use std::io;
 
-use galata_desk_core::venue::{Info, PortfolioHistory, Position, Transport};
+use galata_desk_core::venue::{Info, PortfolioHistory, Position, Side, Transport, UserFill};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::alert::{Alert, Kind};
+use crate::alert::{Alert, Kind, amount};
 use crate::check::{self, CheckError};
 use crate::config::Config;
 use crate::daypnl::{day_pnl, usd};
 use crate::files::{self, Paths};
+use crate::message::{Align, Message, bold, text as words};
 
 /// Quiet hours, local: no slot starting at or after 23:00 and before 07:00.
 pub const QUIET_FROM: i8 = 23;
@@ -98,29 +100,118 @@ fn or_na(d: Option<Decimal>) -> String {
     d.map_or("n/a".into(), usd)
 }
 
-/// The summary's text. `pnl` is each position's 24-hour PNL by market; a
-/// market missing from it reads `n/a`.
-pub fn text(time: &str, windows: &Windows, positions: &[Position], pnl: &HashMap<String, Decimal>) -> String {
-    let mut lines = vec![
-        format!("PnL summary, {time}"),
-        format!("24h {}", or_na(windows.day)),
-        format!("30D {}", or_na(windows.month)),
-        format!("All-time {}", or_na(windows.all_time)),
-    ];
+/// How many trades the summary ends with.
+pub const LAST_TRADES: usize = 3;
+
+/// One order's fills, together: what the trader thinks of as a trade.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Trade {
+    pub market: String,
+    pub side: Side,
+    pub size: Decimal,
+    /// The average price, weighted by size.
+    pub price: Decimal,
+    /// The latest fill's time.
+    pub time_ms: u64,
+}
+
+/// The account's last `n` trades, newest first. Fills of one order make one
+/// trade; a fill without an order id stands alone.
+pub fn last_trades(fills: &[UserFill], n: usize) -> Vec<Trade> {
+    let mut sorted: Vec<&UserFill> = fills.iter().collect();
+    sorted.sort_by_key(|f| std::cmp::Reverse((f.time, f.tid)));
+    let key = |f: &UserFill| if f.oid == 0 { (false, f.tid) } else { (true, f.oid) };
+    let mut keys = Vec::new();
+    for f in &sorted {
+        if !keys.contains(&key(f)) {
+            keys.push(key(f));
+            if keys.len() == n {
+                break;
+            }
+        }
+    }
+    keys.iter()
+        .map(|k| {
+            let own: Vec<&&UserFill> = sorted.iter().filter(|f| key(f) == *k).collect();
+            let size: Decimal = own.iter().map(|f| f.sz).sum();
+            let paid: Decimal = own.iter().map(|f| f.sz * f.px).sum();
+            let dp = own.iter().map(|f| f.px.scale()).max().unwrap_or(0);
+            let price = if size.is_zero() { own[0].px } else { (paid / size).round_dp(dp) };
+            Trade {
+                market: own[0].coin.clone(),
+                side: own[0].side,
+                size: size.normalize(),
+                price: price.normalize(),
+                time_ms: own[0].time,
+            }
+        })
+        .collect()
+}
+
+/// A trade's time in the digest's zone: `14:21` today, `19 Nov 14:21` before.
+pub fn trade_time(ms: u64, now_ms: u64, zone: &str) -> String {
+    let Ok(tz) = TimeZone::get(zone) else {
+        return crate::alert::utc(ms);
+    };
+    let at = |ms: u64| Timestamp::from_millisecond(ms as i64).map(|t| t.to_zoned_datetime(tz.clone()));
+    match (at(ms), at(now_ms)) {
+        (Ok(t), Ok(now)) if t.date() == now.date() => t.strftime("%H:%M").to_string(),
+        (Ok(t), _) => t.strftime("%d %b %H:%M").to_string(),
+        _ => crate::alert::utc(ms),
+    }
+}
+
+/// The summary. `pnl` is each position's 24-hour PNL by market; a market
+/// missing from it reads `n/a`. `trades` come with their times already
+/// written, newest first.
+pub fn message(time: &str, windows: &Windows, positions: &[Position], pnl: &HashMap<String, Decimal>, trades: &[(String, Trade)]) -> Message {
+    let money = [Align::Left, Align::Right, Align::Right];
+    let mut m = Message::new().icon("📊").line(vec![bold(format!("PnL summary, {time}"))]).table(
+        vec![
+            vec!["24h".into(), or_na(windows.day)],
+            vec!["30D".into(), or_na(windows.month)],
+            vec!["All-time".into(), or_na(windows.all_time)],
+        ],
+        &money,
+    );
     if positions.is_empty() {
-        lines.push("No open positions.".into());
-        return lines.join("\n");
+        m = m.line(vec![words("No open positions.")]);
+    } else {
+        let mut rows: Vec<Vec<String>> = positions
+            .iter()
+            .map(|p| {
+                let side = if p.szi.is_sign_positive() { "long" } else { "short" };
+                vec![p.coin.clone(), side.into(), or_na(pnl.get(&p.coin).copied())]
+            })
+            .collect();
+        let listed: Option<Decimal> = positions.iter().map(|p| pnl.get(&p.coin).copied()).sum();
+        if let (Some(day), Some(listed)) = (windows.day, listed) {
+            rows.push(vec!["Closed / other".into(), String::new(), usd(day - listed)]);
+        }
+        m = m.heading("Open positions").table(rows, &[Align::Left, Align::Left, Align::Right]);
     }
-    lines.push("Open positions:".into());
-    for p in positions {
-        let side = if p.szi.is_sign_positive() { "long" } else { "short" };
-        lines.push(format!("{} {side} {}", p.coin, or_na(pnl.get(&p.coin).copied())));
+    if !trades.is_empty() {
+        let rows = trades
+            .iter()
+            .map(|(when, t)| {
+                let side = match t.side {
+                    Side::Buy => "bought",
+                    Side::Sell => "sold",
+                };
+                vec![when.clone(), t.market.clone(), side.into(), amount(t.size), "at".into(), amount(t.price)]
+            })
+            .collect();
+        m = m.heading("Last trades").table(
+            rows,
+            &[Align::Left, Align::Left, Align::Left, Align::Right, Align::Left, Align::Right],
+        );
     }
-    let listed: Option<Decimal> = positions.iter().map(|p| pnl.get(&p.coin).copied()).sum();
-    if let (Some(day), Some(listed)) = (windows.day, listed) {
-        lines.push(format!("Closed / other {}", usd(day - listed)));
-    }
-    lines.join("\n")
+    m
+}
+
+/// The summary's plain text; see [`message`].
+pub fn text(time: &str, windows: &Windows, positions: &[Position], pnl: &HashMap<String, Decimal>, trades: &[(String, Trade)]) -> String {
+    message(time, windows, positions, pnl, trades).plain()
 }
 
 /// The summary, if one is due. Saves nothing; see [`commit`].
@@ -133,7 +224,12 @@ pub async fn run<T: Transport>(info: &Info<T>, paths: &Paths, now_ms: u64) -> Re
     let positions = check::positions(info, &config.address).await?;
     let windows = Windows::from_portfolio(&info.portfolio(&config.address).await?);
     let pnl = day_pnl(info, &config.address, &positions, now_ms).await?;
-    let body = text(&slot.time, &windows, &positions, &pnl);
+    let fills = info.user_fills(&config.address).await?;
+    let trades: Vec<(String, Trade)> = last_trades(&fills, LAST_TRADES)
+        .into_iter()
+        .map(|t| (trade_time(t.time_ms, now_ms, &config.digest.zone), t))
+        .collect();
+    let body = message(&slot.time, &windows, &positions, &pnl, &trades);
     Ok(Some(Outcome {
         alert: Alert {
             id: format!("pnl-{}", slot.id),
@@ -145,8 +241,10 @@ pub async fn run<T: Transport>(info: &Info<T>, paths: &Paths, now_ms: u64) -> Re
             event_ms: now_ms,
             detected_ms: now_ms,
             late: false,
-            text: body,
-        },
+            text: String::new(),
+            html: None,
+        }
+        .with_message(&body),
         sent: Sent {
             last_slot: Some(slot.id),
             last_ms: Some(now_ms),
@@ -272,7 +370,7 @@ mod tests {
 
     #[test]
     fn three_windows_are_signed_and_rounded() {
-        let t = text("14:30", &windows("1234.6", "-4102.2", "18870"), &[], &HashMap::new());
+        let t = text("14:30", &windows("1234.6", "-4102.2", "18870"), &[], &HashMap::new(), &[]);
         assert_eq!(t, "PnL summary, 14:30\n24h +$1,235\n30D -$4,102\nAll-time +$18,870\nNo open positions.");
     }
 
@@ -282,7 +380,7 @@ mod tests {
             all_time: None,
             ..windows("10", "20", "0")
         };
-        let t = text("09:00", &w, &[], &HashMap::new());
+        let t = text("09:00", &w, &[], &HashMap::new(), &[]);
         assert!(t.contains("All-time n/a"), "{t}");
     }
 
@@ -294,6 +392,7 @@ mod tests {
             &windows("1235", "-4102", "18870"),
             &[position("BTC", "0.5"), position("ETH", "-2")],
             &pnl,
+            &[],
         );
         assert_eq!(
             t,
@@ -302,10 +401,64 @@ mod tests {
         );
     }
 
+    fn fill(coin: &str, side: &str, sz: &str, px: &str, time: u64, tid: u64, oid: u64) -> UserFill {
+        serde_json::from_value(json!({
+            "coin": coin, "px": px, "sz": sz, "side": side, "time": time, "closedPnl": "0",
+            "fee": "0", "tid": tid, "oid": oid, "dir": "Open Long", "crossed": true
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_last_three_trades_join_an_orders_fills_newest_first() {
+        let fills = [
+            fill("BTC", "B", "0.1", "60000", 1_000, 1, 7),
+            fill("ETH", "A", "1", "3000", 2_000, 2, 8),
+            // Order 9 filled in two parts, around an unrelated fill.
+            fill("SOL", "B", "3", "150", 3_000, 3, 9),
+            fill("HYPE", "A", "10", "40", 3_500, 4, 10),
+            fill("SOL", "B", "1", "154", 4_000, 5, 9),
+        ];
+        let t = last_trades(&fills, 3);
+        assert_eq!(t.iter().map(|t| t.market.as_str()).collect::<Vec<_>>(), ["SOL", "HYPE", "ETH"]);
+        assert_eq!((t[0].size, t[0].price, t[0].time_ms), (d("4"), d("151"), 4_000));
+        assert_eq!(last_trades(&[], 3), vec![]);
+    }
+
+    #[test]
+    fn trade_times_are_local_and_dated_before_today() {
+        let now = ms("2026-11-20T14:30:00Z");
+        assert_eq!(trade_time(ms("2026-11-20T14:21:00Z"), now, "Europe/London"), "14:21");
+        assert_eq!(trade_time(ms("2026-11-20T14:21:00Z"), now, "Europe/Istanbul"), "17:21");
+        assert_eq!(trade_time(ms("2026-11-19T09:05:00Z"), now, "Europe/London"), "19 Nov 09:05");
+    }
+
+    #[test]
+    fn the_summary_ends_with_the_last_trades() {
+        let trades = vec![
+            ("14:21".to_string(), Trade { market: "BTC".into(), side: Side::Sell, size: d("0.05"), price: d("59300"), time_ms: 0 }),
+            ("19 Nov 09:05".to_string(), Trade { market: "ETH".into(), side: Side::Buy, size: d("1.2"), price: d("3012.5"), time_ms: 0 }),
+        ];
+        let m = message("14:30", &windows("1235", "-4102", "18870"), &[], &HashMap::new(), &trades);
+        assert_eq!(
+            m.plain(),
+            "PnL summary, 14:30\n24h +$1,235\n30D -$4,102\nAll-time +$18,870\nNo open positions.\n\
+             Last trades:\n14:21 BTC sold 0.05 at 59,300\n19 Nov 09:05 ETH bought 1.2 at 3,012.5"
+        );
+        assert_eq!(
+            m.html(),
+            "📊 <b>PnL summary, 14:30</b>\n\
+             <pre>24h        +$1,235\n30D        -$4,102\nAll-time  +$18,870</pre>\n\
+             No open positions.\n\
+             <b>Last trades</b>\n\
+             <pre>14:21         BTC  sold    0.05  at   59,300\n19 Nov 09:05  ETH  bought   1.2  at  3,012.5</pre>"
+        );
+    }
+
     #[test]
     fn a_position_without_a_day_old_price_reads_n_a_and_drops_the_reconciliation() {
         let pnl = HashMap::from([("BTC".to_string(), d("912"))]);
-        let t = text("14:30", &windows("1235", "0", "0"), &[position("BTC", "1"), position("ETH", "-1")], &pnl);
+        let t = text("14:30", &windows("1235", "0", "0"), &[position("BTC", "1"), position("ETH", "-1")], &pnl, &[]);
         assert!(t.contains("ETH short n/a"), "{t}");
         assert!(!t.contains("Closed / other"), "{t}");
     }
@@ -317,7 +470,7 @@ mod tests {
             day: None,
             ..windows("0", "1", "2")
         };
-        let t = text("14:30", &w, &[position("BTC", "1")], &pnl);
+        let t = text("14:30", &w, &[position("BTC", "1")], &pnl, &[]);
         assert!(t.contains("24h n/a") && !t.contains("Closed / other"), "{t}");
     }
 }

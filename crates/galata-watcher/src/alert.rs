@@ -9,6 +9,8 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+use crate::message::{Message, bold, code, italic, text};
+
 /// An event older than this when it is found was missed while the watcher
 /// was down, and says so.
 pub const LATE_MS: u64 = 3 * 60 * 1000;
@@ -76,8 +78,22 @@ pub struct Alert {
     /// When the watcher found it.
     pub detected_ms: u64,
     pub late: bool,
-    /// The message, final.
+    /// The message, final, as plain text: what the history keeps and the
+    /// desk shows.
     pub text: String,
+    /// The same message in Telegram's HTML, which is what is sent. Absent
+    /// in alerts recorded before messages were formatted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html: Option<String>,
+}
+
+impl Alert {
+    /// Sets `text` and `html` from one message.
+    pub fn with_message(mut self, m: &Message) -> Self {
+        self.text = m.plain();
+        self.html = Some(m.html());
+        self
+    }
 }
 
 mod opt_dec {
@@ -127,57 +143,89 @@ pub fn utc(ms: u64) -> String {
     }
 }
 
-fn late_prefix(late: bool, event_ms: u64) -> String {
-    if late {
-        format!("[late: happened {}] ", utc(event_ms))
-    } else {
-        String::new()
-    }
+fn late_line(late: bool, event_ms: u64) -> Option<crate::message::Span> {
+    late.then(|| italic(format!("[late: happened {}] ", utc(event_ms))))
 }
 
-/// The text of a filled order: a take-profit, a stop-loss, or a fill the
-/// watcher could not classify.
-pub fn fill_text(kind: Kind, market: &str, side: Side, size: Decimal, price: Decimal, late: bool, event_ms: u64) -> String {
-    let what = match kind {
-        Kind::TakeProfit => "take-profit filled",
-        Kind::StopLoss => "stop-loss filled",
-        Kind::TriggerUnclassified => "trigger fill (unclassified)",
-        _ => "fill (unclassified)",
+fn with_late(late: bool, event_ms: u64, mut spans: Vec<crate::message::Span>) -> Vec<crate::message::Span> {
+    if let Some(l) = late_line(late, event_ms) {
+        spans.insert(0, l);
+    }
+    spans
+}
+
+/// A filled order: a take-profit, a stop-loss, or a fill the watcher could
+/// not classify.
+pub fn fill_message(kind: Kind, market: &str, side: Side, size: Decimal, price: Decimal, late: bool, event_ms: u64) -> Message {
+    let (what, icon) = match kind {
+        Kind::TakeProfit => ("take-profit filled", "🟢"),
+        Kind::StopLoss => ("stop-loss filled", "🔴"),
+        Kind::TriggerUnclassified => ("trigger fill (unclassified)", "⚪"),
+        _ => ("fill (unclassified)", "⚪"),
     };
-    format!(
-        "{}{market} {what}: {} {} at {}",
-        late_prefix(late, event_ms),
-        side.past(),
-        amount(size),
-        amount(price)
-    )
+    Message::new().icon(icon).line(with_late(
+        late,
+        event_ms,
+        vec![
+            bold(format!("{market} {what}")),
+            text(format!(": {} ", side.past())),
+            code(amount(size)),
+            text(" at "),
+            code(amount(price)),
+        ],
+    ))
+}
+
+pub fn fill_text(kind: Kind, market: &str, side: Side, size: Decimal, price: Decimal, late: bool, event_ms: u64) -> String {
+    fill_message(kind, market, side, size, price, late, event_ms).plain()
 }
 
 /// `long` when the liquidated position was long.
+pub fn liquidation_message(market: &str, long: bool, size: Decimal, price: Decimal, late: bool, event_ms: u64) -> Message {
+    Message::new().icon("🚨").line(with_late(
+        late,
+        event_ms,
+        vec![
+            bold(format!("{market} {} LIQUIDATED", if long { "long" } else { "short" })),
+            text(": "),
+            code(amount(size)),
+            text(" at "),
+            code(amount(price)),
+        ],
+    ))
+}
+
 pub fn liquidation_text(market: &str, long: bool, size: Decimal, price: Decimal, late: bool, event_ms: u64) -> String {
-    format!(
-        "{}{market} {} LIQUIDATED: {} at {}",
-        late_prefix(late, event_ms),
-        if long { "long" } else { "short" },
-        amount(size),
-        amount(price)
-    )
+    liquidation_message(market, long, size, price, late, event_ms).plain()
+}
+
+pub fn near_message(market: &str, mark: Decimal, liquidation: Decimal, distance_pct: Decimal) -> Message {
+    Message::new().icon("⚠️").line(vec![
+        bold(format!("{market} near liquidation")),
+        text(": mark "),
+        code(amount(mark.round_dp(6))),
+        text(", liquidation "),
+        code(amount(liquidation.round_dp(6))),
+        text(", "),
+        bold(format!("{}% away", distance_pct.round_dp(1).normalize())),
+    ])
 }
 
 pub fn near_text(market: &str, mark: Decimal, liquidation: Decimal, distance_pct: Decimal) -> String {
-    format!(
-        "{market} near liquidation: mark {}, liquidation {}, {}% away",
-        amount(mark.round_dp(6)),
-        amount(liquidation.round_dp(6)),
-        distance_pct.round_dp(1).normalize()
-    )
+    near_message(market, mark, liquidation, distance_pct).plain()
+}
+
+pub fn level_message(market: &str, word: &str, price: Decimal, note: Option<&str>) -> Message {
+    let mut spans = vec![bold(format!("{market} crossed {word}")), text(" "), code(amount(price))];
+    if let Some(n) = note {
+        spans.push(text(": "));
+        spans.push(italic(n));
+    }
+    Message::new().icon("🔔").line(spans)
 }
 
 pub fn level_text(market: &str, word: &str, price: Decimal, note: Option<&str>) -> String {
-    match note {
-        Some(n) => format!("{market} crossed {word} {}: {n}", amount(price)),
-        None => format!("{market} crossed {word} {}", amount(price)),
-    }
+    level_message(market, word, price, note).plain()
 }
 
 #[cfg(test)]
@@ -215,6 +263,19 @@ mod tests {
     fn the_near_liquidation_example_reads_13_3_percent() {
         let t = near_text("ETH", d("3000"), d("2600"), d("13.3333"));
         assert_eq!(t, "ETH near liquidation: mark 3,000, liquidation 2,600, 13.3% away");
+    }
+
+    #[test]
+    fn the_stop_is_sent_bold_with_its_figures_marked() {
+        let m = fill_message(Kind::StopLoss, "BTC", Side::Sell, d("0.5"), d("61240"), false, 0);
+        assert_eq!(m.html(), "🔴 <b>BTC stop-loss filled</b>: sold <code>0.5</code> at <code>61,240</code>");
+    }
+
+    #[test]
+    fn a_level_note_is_escaped_in_html() {
+        let m = level_message("BTC", "below", d("58000"), Some("<weekly> & support"));
+        assert_eq!(m.plain(), "BTC crossed below 58,000: <weekly> & support");
+        assert_eq!(m.html(), "🔔 <b>BTC crossed below</b> <code>58,000</code>: <i>&lt;weekly&gt; &amp; support</i>");
     }
 
     #[test]

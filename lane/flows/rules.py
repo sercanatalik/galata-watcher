@@ -1,7 +1,8 @@
 """Who is told what: every alert to Telegram, and the watcher's own health.
 
-- ``account.*``: each alert, as ``galata-notify --alert-id``. ``once="never"``
-  because one check can find several alerts, and cereyan's default fires a
+- ``account.*``: each alert, as ``galata-notify --alert-id``, in its HTML
+  form with ``--html`` when the alert carries one, else its plain text.
+  ``once="never"`` because one check can find several alerts, and cereyan's default fires a
   rule once per run. ``max_per_minute`` is a flood guard only: deciding what
   is worth sending, and per-market quiet times, belong to the poll.
 - ``run.failed`` of ``watch-the-account``, from the third in a row: "watcher
@@ -25,6 +26,8 @@ WATCH = "watch-the-account"
 @APP.rule(on="account.*", once="never", max_per_minute=30)
 def send_alert(event, run):
     alert = event["payload"]
+    if alert.get("html"):
+        return _runner.run("galata-notify", ["--alert-id", alert["id"], "--html"], stdin=alert["html"])
     return _runner.run("galata-notify", ["--alert-id", alert["id"]], stdin=alert["text"])
 
 

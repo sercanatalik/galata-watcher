@@ -1,9 +1,14 @@
 //! galata-notify: send one message to the trader's Telegram chat.
 //!
 //! ```text
-//! galata-notify --data /data --alert-id ID          < message
+//! galata-notify --data /data --alert-id ID [--html]  < message
 //! galata-notify --data /data --liveness broken|ok
 //! ```
+//!
+//! With `--html` the message is Telegram's HTML subset and is sent with
+//! `parse_mode: HTML`. If Telegram cannot parse it, the same words are sent
+//! again as plain text, tags removed, so a formatting mistake never costs
+//! an alert.
 //!
 //! The chat id comes from `config.json`. The bot token is read from a file
 //! of its own (`/run/secrets/telegram_token` unless `--token-file` says
@@ -44,17 +49,19 @@ enum Mode {
 struct Args {
     data: PathBuf,
     mode: Mode,
+    html: bool,
     token_file: PathBuf,
     api_base: String,
     backoff: Duration,
 }
 
-const USAGE: &str = "usage: galata-notify --data DIR (--alert-id ID < message | --liveness broken|ok) [--token-file PATH]";
+const USAGE: &str = "usage: galata-notify --data DIR (--alert-id ID [--html] < message | --liveness broken|ok) [--token-file PATH]";
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut data = None;
     let mut alert_id = None;
     let mut liveness = None;
+    let mut html = false;
     let mut token_file = PathBuf::from(TOKEN_FILE);
     let mut api_base = TELEGRAM.to_string();
     let mut backoff = Duration::from_secs(1);
@@ -65,6 +72,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--data" => data = Some(PathBuf::from(value("--data")?)),
             "--alert-id" => alert_id = Some(value("--alert-id")?),
             "--liveness" => liveness = Some(value("--liveness")?),
+            "--html" => html = true,
             "--token-file" => token_file = PathBuf::from(value("--token-file")?),
             "--api-base" => api_base = value("--api-base")?,
             "--backoff-ms" => {
@@ -82,9 +90,13 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
         (Some(_), Some(_)) => return Err("give --alert-id or --liveness, not both".into()),
         (None, None) => return Err("--alert-id or --liveness is required".into()),
     };
+    if html && !matches!(mode, Mode::Alert(_)) {
+        return Err("--html goes with --alert-id".into());
+    }
     Ok(Args {
         data: data.ok_or("--data is required")?,
         mode,
+        html,
         token_file,
         api_base,
         backoff,
@@ -146,11 +158,33 @@ fn describe(e: &reqwest::Error) -> String {
     }
 }
 
-async fn send_once(client: &reqwest::Client, base: &str, token: &str, chat: &str, text: &str) -> Result<(), String> {
+/// Telegram's word for a message whose markup it could not read.
+const UNPARSABLE: &str = "can't parse entities";
+
+/// HTML as plain text: tags dropped, the three escapes undone.
+fn strip_html(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+}
+
+async fn send_once(client: &reqwest::Client, base: &str, token: &str, chat: &str, text: &str, html: bool) -> Result<(), String> {
     let url = format!("{base}/bot{token}/sendMessage");
+    let mut body = json!({ "chat_id": chat, "text": text, "disable_web_page_preview": true });
+    if html {
+        body["parse_mode"] = json!("HTML");
+    }
     let response = client
         .post(url)
-        .json(&json!({ "chat_id": chat, "text": text, "disable_web_page_preview": true }))
+        .json(&body)
         .send()
         .await
         .map_err(|e| describe(&e))?;
@@ -165,8 +199,11 @@ async fn send_once(client: &reqwest::Client, base: &str, token: &str, chat: &str
     }
 }
 
-/// Send with retries, backing off between attempts.
+/// Send with retries, backing off between attempts. HTML that Telegram
+/// cannot parse is sent again at once as plain text.
 async fn send(args: &Args, token: &str, chat: &str, text: &str) -> Result<(), String> {
+    let mut html = args.html;
+    let mut text = text.to_string();
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -176,8 +213,16 @@ async fn send(args: &Args, token: &str, chat: &str, text: &str) -> Result<(), St
         if attempt > 0 {
             tokio::time::sleep(args.backoff * 2u32.pow(attempt - 1)).await;
         }
-        match send_once(&client, &args.api_base, token, chat, text).await {
+        match send_once(&client, &args.api_base, token, chat, &text, html).await {
             Ok(()) => return Ok(()),
+            Err(e) if html && e.contains(UNPARSABLE) => {
+                html = false;
+                text = strip_html(&text);
+                match send_once(&client, &args.api_base, token, chat, &text, false).await {
+                    Ok(()) => return Ok(()),
+                    Err(e) => last = e,
+                }
+            }
             Err(e) => last = e,
         }
     }
@@ -283,5 +328,17 @@ mod tests {
         assert!(args("--data d").is_err());
         assert!(args("--data d --liveness maybe").is_err());
         assert!(args("--data d --alert-id a --liveness ok").is_err());
+        assert!(args("--data d --alert-id a --html").unwrap().html);
+        assert!(!args("--data d --alert-id a").unwrap().html);
+        assert!(args("--data d --liveness ok --html").is_err());
+    }
+
+    #[test]
+    fn stripped_html_reads_as_the_plain_message() {
+        assert_eq!(
+            strip_html("🔔 <b>BTC crossed below</b> <code>58,000</code>: <i>&lt;weekly&gt; &amp; support</i>"),
+            "🔔 BTC crossed below 58,000: <weekly> & support"
+        );
+        assert_eq!(strip_html("<pre>24h  +$1\n30D  -$2</pre>"), "24h  +$1\n30D  -$2");
     }
 }

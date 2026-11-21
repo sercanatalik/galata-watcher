@@ -38,6 +38,14 @@ def two_alerts_become_two_events_and_two_messages(tools):
     assert all(c["argv"][:2] == ["--data", str(_runner.DATA)] for c in sent)
 
 
+def an_alert_with_html_is_sent_as_html(tools):
+    tools.acts("galata-watcher-poll", (0, alert_line("sl-1", html="<b>sl-1</b>")))
+    assert watch_the_account() == "1 alert(s)"
+    [call] = [c for c in tools.calls("galata-notify") if "--alert-id" in c["argv"]]
+    assert call["argv"][2:] == ["--alert-id", "sl-1", "--html"]
+    assert call["stdin"] == "<b>sl-1</b>"
+
+
 def a_quiet_minute_emits_nothing_and_succeeds(tools):
     tools.acts("galata-watcher-poll", (3, ""))
     assert watch_the_account() == "0 alert(s)"

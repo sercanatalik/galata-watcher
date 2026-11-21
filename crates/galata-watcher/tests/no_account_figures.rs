@@ -133,7 +133,7 @@ fn no_pnl_summary_names_the_address_or_the_account_value() {
                 }
             }
         }
-        let t = galata_watcher::pnl::text("14:30", &windows, &held, &pnl);
+        let t = galata_watcher::pnl::text("14:30", &windows, &held, &pnl, &[]);
         assert!(!t.to_lowercase().contains(&ME[2..]), "{t}");
         for f in &forms {
             assert!(!t.contains(f.as_str()), "{t} contains the account value {f}");

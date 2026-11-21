@@ -13,7 +13,9 @@ It sends a message when:
 - a price crosses a level you set.
 
 It also sends a daily digest and, every half hour through the day, a PnL
-summary.
+summary that ends with the account's last three trades. Messages are
+formatted (bold events, monospaced figures, aligned columns), and fall back
+to plain text if Telegram refuses the formatting.
 
 It only reads the account's public data. It holds no trading key and never
 places, amends or cancels an order.
@@ -62,8 +64,9 @@ start within a minute.
 
 **The PnL summary** gives the account's PnL over the venue's rolling 24h,
 30D and all-time windows (perps, spot and vaults), then each open position's
-24-hour PnL, computed as in the digest, and a `Closed / other` line that
-makes the positions add up to the 24h figure. It is sent for each slot on
+24-hour PnL, computed as in the digest, a `Closed / other` line that
+makes the positions add up to the 24h figure, and the last three trades
+(fills of one order together, at their average price). It is sent for each slot on
 the hour and the half hour in the digest's time zone, except from 23:00 to
 07:00, within ten minutes of the slot's start or not at all. The last slot
 sent is kept in `pnl.json` on the data volume, so a restart never sends one

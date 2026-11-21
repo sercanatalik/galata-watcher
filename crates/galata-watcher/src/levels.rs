@@ -79,8 +79,10 @@ pub fn check(levels: &[Level], candles: &HashMap<String, Vec<WireCandle>>, state
             event_ms,
             detected_ms: now_ms,
             late: false,
-            text: alert::level_text(&level.market, level.direction.word(), level.price, level.note.as_deref()),
-        });
+            text: String::new(),
+            html: None,
+        }
+        .with_message(&alert::level_message(&level.market, level.direction.word(), level.price, level.note.as_deref())));
     }
     out
 }

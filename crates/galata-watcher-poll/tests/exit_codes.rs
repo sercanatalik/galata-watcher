@@ -157,7 +157,7 @@ fn venue_for_a_summary(req: &Value) -> Option<Value> {
         "clearinghouseState" => json!({"marginSummary": {"accountValue": "0", "totalNtlPos": "0", "totalMarginUsed": "0"},
             "withdrawable": "0", "assetPositions": []}),
         "portfolio" => json!([["day", window("1234.6")], ["month", window("-4102.2")], ["allTime", window("18870")]]),
-        "userFillsByTime" | "userFunding" => json!([]),
+        "userFillsByTime" | "userFunding" | "userFills" => json!([]),
         _ => return None,
     })
 }

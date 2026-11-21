@@ -69,9 +69,12 @@ class Tools:
         return out
 
 
-def alert_line(id: str, kind: str = "stop_loss", text: str | None = None) -> str:
-    return json.dumps({"id": id, "kind": kind, "market": "BTC", "event_ms": 1, "detected_ms": 1,
-                       "late": False, "text": text or f"text of {id}"})
+def alert_line(id: str, kind: str = "stop_loss", text: str | None = None, html: str | None = None) -> str:
+    alert = {"id": id, "kind": kind, "market": "BTC", "event_ms": 1, "detected_ms": 1,
+             "late": False, "text": text or f"text of {id}"}
+    if html is not None:
+        alert["html"] = html
+    return json.dumps(alert)
 
 
 @pytest.fixture(autouse=True)

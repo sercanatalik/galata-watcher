@@ -23,6 +23,7 @@ use crate::classify::trigger_kind;
 use crate::config::Config;
 use crate::daypnl::{day_pnl, usd};
 use crate::files::{self, Paths};
+use crate::message::{Message, bold, code, text as words};
 use crate::nearliq;
 use crate::state::State;
 
@@ -89,8 +90,54 @@ fn pct(d: Decimal) -> String {
     format!("{}%", d.round_dp(dp).normalize())
 }
 
-/// The digest's text. `pnl` is each position's 24-hour PNL by market; a
-/// market missing from it reads `n/a`.
+/// The digest. `pnl` is each position's 24-hour PNL by market; a market
+/// missing from it reads `n/a`.
+pub fn message(
+    date: &str,
+    positions: &[Position],
+    pnl: &HashMap<String, Decimal>,
+    orders: &[OpenOrder],
+    armed: usize,
+    alerts: usize,
+    undelivered: usize,
+) -> Message {
+    let cover = coverage(orders);
+    let mut m = Message::new().icon("🗓").line(vec![bold(format!("Daily digest, {date}"))]);
+    if positions.is_empty() {
+        m = m.line(vec![words("No open positions.")]);
+    }
+    for p in positions {
+        let side = if p.szi.is_sign_positive() { "long" } else { "short" };
+        let c = cover.get(&p.coin);
+        let stop = if c.is_some_and(|c| c.stop) { words("stop-loss yes") } else { bold("NO STOP-LOSS") };
+        let tp = if c.is_some_and(|c| c.take_profit) { "take-profit yes" } else { "take-profit no" };
+        let liq = match nearliq::distance(p) {
+            Some(d) => format!("{} from liquidation", pct(d.pct)),
+            None => "no liquidation price".into(),
+        };
+        let day = pnl.get(&p.coin).map_or("n/a".into(), |d| usd(*d));
+        m = m.line(vec![
+            bold(p.coin.clone()),
+            words(format!(" {side}, 24h PnL ")),
+            code(day),
+            words(": "),
+            stop,
+            words(format!(", {tp}, {liq}")),
+        ]);
+    }
+    m = m.line(vec![words(format!("Armed call levels: {armed}"))]);
+    if undelivered > 0 {
+        m.line(vec![
+            words(format!("Alerts since the last digest: {alerts} (")),
+            bold(format!("{undelivered} not delivered")),
+            words(")"),
+        ])
+    } else {
+        m.line(vec![words(format!("Alerts since the last digest: {alerts}"))])
+    }
+}
+
+/// The digest's plain text; see [`message`].
 pub fn text(
     date: &str,
     positions: &[Position],
@@ -100,30 +147,7 @@ pub fn text(
     alerts: usize,
     undelivered: usize,
 ) -> String {
-    let cover = coverage(orders);
-    let mut lines = vec![format!("Daily digest, {date}")];
-    if positions.is_empty() {
-        lines.push("No open positions.".into());
-    }
-    for p in positions {
-        let side = if p.szi.is_sign_positive() { "long" } else { "short" };
-        let c = cover.get(&p.coin);
-        let stop = if c.is_some_and(|c| c.stop) { "stop-loss yes" } else { "NO STOP-LOSS" };
-        let tp = if c.is_some_and(|c| c.take_profit) { "take-profit yes" } else { "take-profit no" };
-        let liq = match nearliq::distance(p) {
-            Some(d) => format!("{} from liquidation", pct(d.pct)),
-            None => "no liquidation price".into(),
-        };
-        let day = pnl.get(&p.coin).map_or("n/a".into(), |d| usd(*d));
-        lines.push(format!("{} {side}, 24h PnL {day}: {stop}, {tp}, {liq}", p.coin));
-    }
-    lines.push(format!("Armed call levels: {armed}"));
-    if undelivered > 0 {
-        lines.push(format!("Alerts since the last digest: {alerts} ({undelivered} not delivered)"));
-    } else {
-        lines.push(format!("Alerts since the last digest: {alerts}"));
-    }
-    lines.join("\n")
+    message(date, positions, pnl, orders, armed, alerts, undelivered).plain()
 }
 
 /// Alerts detected after `since_ms` (digests and PnL summaries excluded), and how many of
@@ -161,7 +185,7 @@ pub async fn run<T: Transport>(info: &Info<T>, paths: &Paths, now_ms: u64) -> Re
     let armed = config.levels.iter().filter(|l| state.is_armed(l)).count();
     let since = sent.last_ms.unwrap_or(now_ms.saturating_sub(24 * 60 * 60 * 1000));
     let (alerts, undelivered) = counts(paths, since)?;
-    let body = text(&date, &positions, &pnl, &orders, armed, alerts, undelivered);
+    let body = message(&date, &positions, &pnl, &orders, armed, alerts, undelivered);
     Ok(Some(Outcome {
         alert: Alert {
             id: format!("digest-{date}"),
@@ -173,8 +197,10 @@ pub async fn run<T: Transport>(info: &Info<T>, paths: &Paths, now_ms: u64) -> Re
             event_ms: now_ms,
             detected_ms: now_ms,
             late: false,
-            text: body,
-        },
+            text: String::new(),
+            html: None,
+        }
+        .with_message(&body),
         sent: Sent {
             last_ms: Some(now_ms),
             last_date: Some(date),
@@ -294,6 +320,7 @@ mod tests {
             detected_ms: at,
             late: false,
             text: String::new(),
+            html: None,
         };
         for a in [mk("old", Kind::StopLoss, 5), mk("a", Kind::StopLoss, 20), mk("b", Kind::Level, 30), mk("digest-x", Kind::Digest, 40), mk("pnl-x", Kind::PnlSummary, 50)] {
             files::append_line(&paths.alerts(), &a).unwrap();

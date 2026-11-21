@@ -167,8 +167,10 @@ pub fn classify(fills: &[Fill], orders: Option<&HashMap<u64, OrderKind>>, config
             event_ms: g.event_ms,
             detected_ms: now_ms,
             late,
-            text: alert::fill_text(kind, &g.market, side, g.size, g.price(), late, g.event_ms),
-        });
+            text: String::new(),
+            html: None,
+        }
+        .with_message(&alert::fill_message(kind, &g.market, side, g.size, g.price(), late, g.event_ms)));
     }
 
     for (coin, g) in liquidations {
@@ -183,8 +185,10 @@ pub fn classify(fills: &[Fill], orders: Option<&HashMap<u64, OrderKind>>, config
             event_ms: g.event_ms,
             detected_ms: now_ms,
             late,
-            text: alert::liquidation_text(&coin, g.long, g.size, g.price(), late, g.event_ms),
-        });
+            text: String::new(),
+            html: None,
+        }
+        .with_message(&alert::liquidation_message(&coin, g.long, g.size, g.price(), late, g.event_ms)));
     }
 
     out

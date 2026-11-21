@@ -20,7 +20,7 @@ fn telegram(accept: impl Fn(usize) -> bool + Send + Sync + 'static) -> (String, 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let count = Arc::new(AtomicUsize::new(0));
-    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
     let accept = Arc::new(accept);
     let (c, s) = (count.clone(), seen.clone());
     std::thread::spawn(move || {
@@ -50,7 +50,11 @@ fn telegram(accept: impl Fn(usize) -> bool + Send + Sync + 'static) -> (String, 
                     reader.read_exact(&mut body).unwrap();
                     let n = c.fetch_add(1, Ordering::SeqCst);
                     s.lock().unwrap().push((path, serde_json::from_slice(&body).unwrap()));
-                    let (status, text) = if accept(n) {
+                    let parsed: Value = s.lock().unwrap().last().unwrap().1.clone();
+                    let unparsable = parsed["parse_mode"] == "HTML" && parsed["text"].as_str().unwrap_or("").contains("<broken");
+                    let (status, text) = if unparsable {
+                        ("400 Bad Request", json!({"ok": false, "description": "Bad Request: can't parse entities: unsupported start tag \"broken\""}).to_string())
+                    } else if accept(n) {
                         ("200 OK", json!({"ok": true, "result": {}}).to_string())
                     } else {
                         ("429 Too Many Requests", json!({"ok": false, "description": "Too Many Requests: retry later"}).to_string())
@@ -120,6 +124,39 @@ fn rejected_once_then_accepted_is_one_delivery() {
     let d = data.deliveries();
     assert_eq!(d.len(), 1);
     assert_eq!((d[0]["alert_id"].as_str(), d[0]["delivered"].as_bool()), (Some("sl-9"), Some(true)));
+}
+
+#[test]
+fn html_is_sent_with_its_parse_mode() {
+    let (base, _, seen) = telegram(|_| true);
+    let data = Data::new();
+    let (code, _) = data.notify(&base, &["--alert-id", "sl-9", "--html"], "🔴 <b>BTC stop-loss filled</b>\n");
+    assert_eq!(code, 0);
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].1["parse_mode"], "HTML");
+    assert_eq!(seen[0].1["text"], "🔴 <b>BTC stop-loss filled</b>");
+}
+
+#[test]
+fn unparsable_html_is_sent_again_as_plain_text() {
+    let (base, _, seen) = telegram(|_| true);
+    let data = Data::new();
+    let (code, _) = data.notify(&base, &["--alert-id", "lv-1", "--html"], "<b>BTC</b> <broken>58,000 &amp; up");
+    assert_eq!(code, 0);
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2, "one HTML try, one plain");
+    assert!(seen[1].1.get("parse_mode").is_none());
+    assert_eq!(seen[1].1["text"], "BTC 58,000 & up");
+    assert_eq!(data.deliveries().last().unwrap()["delivered"], true);
+}
+
+#[test]
+fn plain_text_has_no_parse_mode() {
+    let (base, _, seen) = telegram(|_| true);
+    let data = Data::new();
+    assert_eq!(data.notify(&base, &["--alert-id", "a"], "x < y").0, 0);
+    assert!(seen.lock().unwrap()[0].1.get("parse_mode").is_none());
 }
 
 #[test]

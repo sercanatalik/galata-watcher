@@ -32,6 +32,7 @@ impl Transport for Venue {
             "clearinghouseState" => fixture("clearinghouseState.json"),
             "portfolio" => fixture("portfolio.json"),
             "userFillsByTime" | "userFunding" => json!([]),
+            "userFills" => fixture("userFillsByTime_triggers.json"),
             "candleSnapshot" if body["req"]["coin"] == "BTC" => fixture("candleSnapshot_BTC.json"),
             "candleSnapshot" => json!([]),
             other => panic!("unexpected query {other}"),
@@ -71,6 +72,12 @@ async fn a_summary_is_made_once_per_slot() {
     assert!(lines[5].starts_with("BTC short ") && !lines[5].ends_with("n/a"), "{}", a.text);
     assert_eq!(lines[6], "ETH short n/a");
     assert!(!a.text.contains("Closed / other"), "a position without a price drops it");
+    // Then the last three trades, one line each.
+    let at = lines.iter().position(|l| *l == "Last trades:").expect("a trades section");
+    assert_eq!(lines.len(), at + 4, "{}", a.text);
+    let html = a.html.as_deref().expect("sent as HTML");
+    assert!(html.starts_with("📊 <b>PnL summary, 14:00</b>\n<pre>"), "{html}");
+    assert!(html.contains("<b>Last trades</b>\n<pre>"), "{html}");
 
     pnl::commit(&paths, &outcome).unwrap();
     let saved: Vec<Alert> = files::read_lines(&paths.alerts()).unwrap();

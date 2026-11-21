@@ -259,6 +259,7 @@ fn alert(id: &str, kind: Kind, at: u64) -> Alert {
         detected_ms: at,
         late: id == "late",
         text: format!("text of {id}"),
+        html: None,
     }
 }
 
