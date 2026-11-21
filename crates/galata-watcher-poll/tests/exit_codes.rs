@@ -216,10 +216,66 @@ fn a_due_summary_prints_one_alert_and_exits_0_then_3() {
 }
 
 #[test]
-fn digest_and_pnl_together_exit_2() {
+fn two_modes_together_exit_2() {
+    for modes in [["--digest", "--pnl"], ["--pnl", "--markets"], ["--digest", "--markets"]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_galata-watcher-poll"))
+            .args(["--data", "/nonexistent"])
+            .args(modes)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2), "{modes:?}");
+    }
+}
+
+/// A venue with one market, as `metaAndAssetCtxs` answers.
+fn venue_for_an_update(req: &Value) -> Option<Value> {
+    (req["type"] == "metaAndAssetCtxs").then(|| {
+        json!([
+            {"universe": [{"name": "BTC"}]},
+            [{"prevDayPx": "64609.0", "markPx": "64796.1", "midPx": "64798.5"}]
+        ])
+    })
+}
+
+fn poll_markets(dir: &tempfile::TempDir, url: &str) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_galata-watcher-poll"))
-        .args(["--data", "/nonexistent", "--digest", "--pnl"])
+        .args(["--data", dir.path().to_str().unwrap(), "--info-url", url, "--markets"])
+        .env_clear()
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(2));
+    (out.status.code().unwrap(), String::from_utf8(out.stdout).unwrap())
+}
+
+fn update_config(zone: &str, watchlist: Value) -> Value {
+    json!({"address": ME, "telegram_chat": "1", "digest": {"time": "07:00", "zone": zone}, "watchlist": watchlist})
+}
+
+#[test]
+fn a_market_update_in_quiet_hours_or_with_nothing_watched_exits_3() {
+    let url = serve(venue_for_an_update);
+    let quiet = data(update_config(&zone_at(2), json!(["BTC"])));
+    assert_eq!(poll_markets(&quiet, &url), (3, String::new()));
+    let unwatched = data(update_config(&zone_at(12), json!([])));
+    assert_eq!(poll_markets(&unwatched, &url), (3, String::new()));
+}
+
+/// As for the summary: exit 0 needs the wall clock inside a slot's first
+/// ten minutes. The 0 path itself is covered without a clock by
+/// galata-watcher's `tests/markets.rs`.
+#[test]
+fn a_due_market_update_prints_one_alert_and_exits_0_then_3() {
+    let dir = data(update_config(&zone_at(12), json!(["BTC"])));
+    let url = serve(venue_for_an_update);
+    let in_grace = now_ms() / 60_000 % 15 < 9;
+    let (code, out) = poll_markets(&dir, &url);
+    if !in_grace {
+        assert_eq!((code, out.as_str()), (3, ""), "past the slot's grace");
+        return;
+    }
+    assert_eq!(code, 0);
+    let line: Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(line["kind"], "market_update");
+    assert!(line["id"].as_str().unwrap().starts_with("markets-"));
+    assert!(line["text"].as_str().unwrap().ends_with("\nBTC 64,798.5 +0.29%"), "{line}");
+    assert_eq!(poll_markets(&dir, &url), (3, String::new()), "once per slot");
 }

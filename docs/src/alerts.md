@@ -82,6 +82,25 @@ within the last week, and the date before that.
 A slot is sent within ten minutes of its start or not at all, and never
 twice, even across a restart. `pnl_summary: false` turns it off.
 
+## Market update
+
+Every quarter of an hour in the digest's time zone, except from 23:00 to
+07:00: each market on the watchlist with its last price and its change over
+24 hours, in the watchlist's order. The watchlist is the configuration's
+`watchlist`, which galata-desk keeps equal to its own.
+
+```text
+📈 Markets, 14:15
+BTC         64,798.5  +0.29%
+ETH          3,100.5  +3.35%
+xyz:NVDA      157.63  -2.32%
+```
+
+A market the venue does not list reads `n/a`. Like the PnL summary, a slot
+is sent within ten minutes of its start or not at all, and never twice.
+Nothing is sent while the watchlist is empty, and `market_update: false`
+turns it off.
+
 ## Health
 
 If the checks fail three times in a row, the watcher sends **watcher

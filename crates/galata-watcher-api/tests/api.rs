@@ -194,6 +194,26 @@ async fn a_pnl_summary_setting_that_is_not_a_switch_is_422_naming_it() {
     assert_eq!(api.get("/config").await.2["version"], 1);
 }
 
+#[tokio::test]
+async fn the_watchlist_and_market_update_switch_are_written_and_read_back() {
+    let api = Api::with_config(1);
+    let (_, _, before) = api.get("/config").await;
+    assert_eq!((before["market_update"].clone(), before["watchlist"].clone()), (json!(true), json!([])));
+    let mut doc = config();
+    doc["market_update"] = json!(false);
+    doc["watchlist"] = json!(["BTC", "xyz:NVDA"]);
+    let (status, _, _) = api.put(Some("\"1\""), doc.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, read) = api.get("/config").await;
+    assert_eq!((read["market_update"].clone(), read["watchlist"].clone()), (json!(false), json!(["BTC", "xyz:NVDA"])));
+
+    doc["watchlist"] = json!(["BTC", 7]);
+    let (status, _, body) = api.put(Some("\"2\""), doc).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["problems"][0].as_str().unwrap().starts_with("`watchlist[1]`"));
+    assert_eq!(api.get("/config").await.2["version"], 2);
+}
+
 fn fired_at_0312(api: &Api, generation: u64) {
     let mut s = State::default();
     s.fired.insert("btc-58k".into(), Fired { generation, at_ms: 1_795_057_920_000 });

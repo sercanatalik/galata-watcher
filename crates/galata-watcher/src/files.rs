@@ -36,6 +36,10 @@ impl Paths {
     pub fn pnl(&self) -> PathBuf {
         self.root.join("pnl.json")
     }
+    /// Written by the poll's market-update mode only: the last update's slot.
+    pub fn markets(&self) -> PathBuf {
+        self.root.join("markets.json")
+    }
     /// Written by the poll only: the outcome of the latest check.
     pub fn health(&self) -> PathBuf {
         self.root.join("health.json")

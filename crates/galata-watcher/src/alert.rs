@@ -30,6 +30,8 @@ pub enum Kind {
     Digest,
     /// The half-hourly PnL summary.
     PnlSummary,
+    /// The quarter-hourly market update: watched markets' prices.
+    MarketUpdate,
 }
 
 impl Kind {
@@ -283,5 +285,6 @@ mod tests {
         assert_eq!(Kind::StopLoss.event_name(), "account.stop_loss");
         assert_eq!(Kind::NearLiquidation.event_name(), "account.near_liquidation");
         assert_eq!(Kind::PnlSummary.event_name(), "account.pnl_summary");
+        assert_eq!(Kind::MarketUpdate.event_name(), "account.market_update");
     }
 }

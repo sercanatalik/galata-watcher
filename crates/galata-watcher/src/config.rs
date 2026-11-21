@@ -16,6 +16,9 @@ pub const NEAR_LIQ_MIN: Decimal = Decimal::from_parts(2, 0, 0, false, 0);
 pub const NEAR_LIQ_MAX: Decimal = Decimal::from_parts(50, 0, 0, false, 0);
 pub const NEAR_LIQ_DEFAULT: Decimal = Decimal::from_parts(15, 0, 0, false, 0);
 
+/// The most markets the watchlist holds: galata-desk's own limit.
+pub const WATCHLIST_MAX: usize = 40;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Network {
@@ -108,6 +111,14 @@ pub struct Config {
     /// The half-hourly PnL summary. On unless set to `false`.
     #[serde(default = "on")]
     pub pnl_summary: bool,
+    /// The quarter-hourly market update. On unless set to `false`; nothing
+    /// is sent while the watchlist is empty.
+    #[serde(default = "on")]
+    pub market_update: bool,
+    /// The markets the market update lists, in order: `BTC`, `xyz:NVDA`.
+    /// galata-desk writes its own watchlist here.
+    #[serde(default)]
+    pub watchlist: Vec<String>,
     #[serde(default)]
     pub levels: Vec<Level>,
 }
@@ -157,6 +168,8 @@ const TOP_KEYS: &[&str] = &[
     "digest",
     "stop_alerts",
     "pnl_summary",
+    "market_update",
+    "watchlist",
     "levels",
 ];
 const LEVEL_KEYS: &[&str] = &[
@@ -273,6 +286,37 @@ pub fn check(doc: &Value) -> Result<Checked, Vec<String>> {
         }
     };
 
+    let market_update = match obj.get("market_update") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => {
+            problems.push("`market_update`: must be true or false".into());
+            true
+        }
+    };
+
+    let mut watchlist: Vec<String> = Vec::new();
+    match obj.get("watchlist") {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(rows)) => {
+            for (i, row) in rows.iter().enumerate() {
+                match row.as_str().map(str::trim) {
+                    Some(m) if !m.is_empty() => {
+                        // A market named twice is listed once.
+                        if !watchlist.iter().any(|w| w == m) {
+                            watchlist.push(m.to_string());
+                        }
+                    }
+                    _ => problems.push(format!("`watchlist[{i}]`: must be a market's name, as `BTC` or `xyz:NVDA`")),
+                }
+            }
+            if watchlist.len() > WATCHLIST_MAX {
+                problems.push(format!("`watchlist`: at most {WATCHLIST_MAX} markets"));
+            }
+        }
+        Some(_) => problems.push("`watchlist`: must be a list of market names".into()),
+    }
+
     let mut levels = Vec::new();
     let mut stated = BTreeMap::new();
     match obj.get("levels") {
@@ -303,6 +347,8 @@ pub fn check(doc: &Value) -> Result<Checked, Vec<String>> {
                 digest,
                 stop_alerts,
                 pnl_summary,
+                market_update,
+                watchlist,
                 levels,
             },
             stated,
@@ -455,6 +501,44 @@ mod tests {
         let mut earlier = saved.clone();
         earlier.as_object_mut().unwrap().remove("pnl_summary");
         assert!(serde_json::from_value::<Config>(earlier).unwrap().pnl_summary, "a config.json without it");
+    }
+
+    #[test]
+    fn the_market_update_is_a_switch_and_a_list_of_markets() {
+        let doc = valid();
+        let c = check(&doc).unwrap().config;
+        assert!(c.market_update && c.watchlist.is_empty(), "absent: on, and nothing to list");
+
+        let mut listed = doc.clone();
+        listed["market_update"] = json!(false);
+        listed["watchlist"] = json!(["BTC", " xyz:NVDA ", "BTC"]);
+        let c = check(&listed).unwrap().config;
+        assert!(!c.market_update);
+        assert_eq!(c.watchlist, ["BTC", "xyz:NVDA"], "trimmed, and a repeat listed once");
+
+        let mut bad = doc.clone();
+        bad["market_update"] = json!("hourly");
+        bad["watchlist"] = json!(["BTC", "", 7]);
+        assert_eq!(
+            check(&bad).unwrap_err(),
+            [
+                "`market_update`: must be true or false",
+                "`watchlist[1]`: must be a market's name, as `BTC` or `xyz:NVDA`",
+                "`watchlist[2]`: must be a market's name, as `BTC` or `xyz:NVDA`",
+            ]
+        );
+        bad = doc.clone();
+        bad["watchlist"] = json!("BTC");
+        assert_eq!(check(&bad).unwrap_err(), ["`watchlist`: must be a list of market names"]);
+        bad["watchlist"] = json!((0..=WATCHLIST_MAX).map(|i| format!("M{i}")).collect::<Vec<_>>());
+        assert_eq!(check(&bad).unwrap_err(), ["`watchlist`: at most 40 markets"]);
+
+        // A config.json saved before either field existed.
+        let mut earlier = serde_json::to_value(check(&doc).unwrap().config).unwrap();
+        earlier.as_object_mut().unwrap().remove("market_update");
+        earlier.as_object_mut().unwrap().remove("watchlist");
+        let read = serde_json::from_value::<Config>(earlier).unwrap();
+        assert!(read.market_update && read.watchlist.is_empty());
     }
 
     #[test]

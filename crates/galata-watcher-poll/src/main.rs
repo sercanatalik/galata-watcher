@@ -1,7 +1,7 @@
 //! galata-watcher-poll: check the account once and print what is new.
 //!
 //! ```text
-//! galata-watcher-poll --data /data [--digest | --pnl] [--info-url URL]
+//! galata-watcher-poll --data /data [--digest | --pnl | --markets] [--info-url URL]
 //! ```
 //!
 //! Prints one JSON alert per line, then saves its state. Exit codes, read by
@@ -10,7 +10,7 @@
 //! | code | meaning |
 //! |---|---|
 //! | 0 | alerts printed |
-//! | 3 | nothing new (for `--digest`: no digest due; for `--pnl`: no slot due, or quiet hours) |
+//! | 3 | nothing new (for `--digest`: no digest due; for `--pnl` and `--markets`: no slot due, or quiet hours) |
 //! | 1 | broken: the venue or the data volume failed; nothing saved but health |
 //! | 2 | bad argument or invalid configuration |
 
@@ -22,6 +22,7 @@ use galata_desk_core::venue::{Http, Info};
 use galata_watcher::alert::Alert;
 use galata_watcher::check::{self, CheckError};
 use galata_watcher::digest;
+use galata_watcher::markets;
 use galata_watcher::pnl;
 use galata_watcher::files::Paths;
 
@@ -29,6 +30,7 @@ struct Args {
     data: String,
     digest: bool,
     pnl: bool,
+    markets: bool,
     info_url: Option<String>,
 }
 
@@ -36,6 +38,7 @@ fn parse_args() -> Result<Args, String> {
     let mut data = None;
     let mut digest = false;
     let mut pnl = false;
+    let mut markets = false;
     let mut info_url = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -43,20 +46,22 @@ fn parse_args() -> Result<Args, String> {
             "--data" => data = it.next(),
             "--digest" => digest = true,
             "--pnl" => pnl = true,
+            "--markets" => markets = true,
             "--info-url" => info_url = it.next(),
             "--help" | "-h" => {
-                return Err("usage: galata-watcher-poll --data DIR [--digest | --pnl] [--info-url URL]".into());
+                return Err("usage: galata-watcher-poll --data DIR [--digest | --pnl | --markets] [--info-url URL]".into());
             }
             other => return Err(format!("unknown argument `{other}`")),
         }
     }
-    if digest && pnl {
-        return Err("--digest and --pnl are separate runs".into());
+    if [digest, pnl, markets].iter().filter(|on| **on).count() > 1 {
+        return Err("--digest, --pnl and --markets are separate runs".into());
     }
     Ok(Args {
         data: data.ok_or("--data is required")?,
         digest,
         pnl,
+        markets,
         info_url,
     })
 }
@@ -126,6 +131,23 @@ async fn main() -> ExitCode {
             Ok(None) => ExitCode::from(3),
             Ok(Some(outcome)) => {
                 if let Err(e) = print(std::slice::from_ref(&outcome.alert)).and_then(|_| pnl::commit(&paths, &outcome)) {
+                    eprintln!("data: {e}");
+                    return ExitCode::from(1);
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                code(&e)
+            }
+        };
+    }
+
+    if args.markets {
+        return match markets::run(&http, &paths, now).await {
+            Ok(None) => ExitCode::from(3),
+            Ok(Some(outcome)) => {
+                if let Err(e) = print(std::slice::from_ref(&outcome.alert)).and_then(|_| markets::commit(&paths, &outcome)) {
                     eprintln!("data: {e}");
                     return ExitCode::from(1);
                 }

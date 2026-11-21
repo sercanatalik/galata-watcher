@@ -12,8 +12,10 @@ It sends a message when:
 - a position is liquidated, or comes within a set distance of liquidation;
 - a price crosses a level you set.
 
-It also sends a daily digest and, every half hour through the day, a PnL
-summary that ends with the account's last three trades. Messages are
+It also sends a daily digest, every half hour through the day a PnL
+summary that ends with the account's last three trades, and every quarter
+of an hour the last price and 24-hour change of each market on galata-desk's
+watchlist. Messages are
 formatted (bold events, monospaced figures, aligned columns), and fall back
 to plain text if Telegram refuses the formatting.
 
@@ -26,8 +28,9 @@ places, amends or cancels an order.
 
 Part of the Galata trading framework.
 [galata-desk](https://github.com/sercanatalik/galata-desk), the desktop app,
-connects to this watcher's API: it draws the call levels on its charts and
-edits the levels, stop alerts and near-liquidation distance. Anything that
+connects to this watcher's API: it draws the call levels on its charts,
+edits the levels, stop alerts and near-liquidation distance, and keeps the
+watcher's watchlist equal to its own. Anything that
 can make an HTTP request can do the same.
 
 ## Quick start (Mac)
@@ -60,6 +63,7 @@ start within a minute.
   rule on run.failed x3 / run.completed --> galata-notify --liveness broken|ok
   cron digest time --> flow send-the-digest --> galata-watcher-poll --digest --> galata-notify
   cron :00 and :30 --> flow send-the-pnl-summary --> galata-watcher-poll --pnl --> galata-notify
+  cron every 15m --> flow send-the-market-update --> galata-watcher-poll --markets --> galata-notify
 ```
 
 **The PnL summary** gives the account's PnL over the venue's rolling 24h,
@@ -77,10 +81,16 @@ minutes:
 galata-watcher-poll --data var/data --pnl   # exit 3: no slot due
 ```
 
+**The market update** lists each market in the configuration's `watchlist`
+with its last price (the mid, or the mark where there is no mid) and its
+change over 24 hours, at :00, :15, :30 and :45, with the PnL summary's quiet
+hours, grace and once-per-slot record (`markets.json`). It asks the venue for
+market figures only, one question per dex.
+
 | Part | What it does |
 |---|---|
 | `crates/galata-watcher` | Library: config, state, fill classification, levels, near-liquidation, message text. All tested without a network. |
-| `crates/galata-watcher-poll` | One check of the account: prints new alerts, then saves state. `--digest` and `--pnl` make the daily digest and the half-hourly PnL summary instead. |
+| `crates/galata-watcher-poll` | One check of the account: prints new alerts, then saves state. `--digest`, `--pnl` and `--markets` make the daily digest, the half-hourly PnL summary and the quarter-hourly market update instead. |
 | `crates/galata-notify` | Sends one message to Telegram and records whether it was delivered. |
 | `crates/galata-watcher-api` | Reads and writes the configuration, and lists alerts and health over HTTP. |
 | `lane/` | The [cereyan](https://github.com/sercanatalik/cereyan) project that schedules the checks and turns alerts into messages. It only spawns the binaries above. |
@@ -114,7 +124,8 @@ A change is used from the next check, within a minute, with no restart.
 **The configuration.** `version` and each level's `generation` are set by
 the API, and a writer's values for them are ignored. Leaving out
 `near_liquidation_pct` (2 to 50, default 15), `network`, `digest`,
-`stop_alerts`, `pnl_summary` or `levels` gives the default. Liquidation and
+`stop_alerts`, `pnl_summary`, `market_update`, `watchlist` or `levels` gives
+the default. Liquidation and
 near-liquidation alerts have no off switch, and a field that tries to add
 one is refused.
 
@@ -128,6 +139,8 @@ one is refused.
   "digest": { "time": "07:00", "zone": "Europe/Istanbul" },
   "stop_alerts": true,
   "pnl_summary": true,
+  "market_update": true,
+  "watchlist": ["BTC", "xyz:NVDA"],
   "levels": [
     { "id": "btc-support", "market": "BTC", "price": "58000", "direction": "below", "note": "weekly support" },
     { "market": "xyz:NVDA", "price": "210", "direction": "above" }
@@ -147,6 +160,12 @@ sends one alert, with its size and average price.
 **PnL summary.** `pnl_summary` switches the half-hourly PnL summary on or
 off; it is on when left out. While it is off no summary is sent, and a slot
 that passed while it was off is not sent later.
+
+**Market update.** `watchlist` names the markets the quarter-hourly market
+update lists, in order, at most 40: `BTC`, or `dex:TICKER` on a builder dex.
+galata-desk writes its own watchlist here whenever it changes. `market_update`
+switches the update on or off; it is on when left out, and nothing is sent
+while the watchlist is empty.
 
 ## The Telegram bot
 

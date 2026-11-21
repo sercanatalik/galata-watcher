@@ -12,5 +12,6 @@ pub mod nearliq;
 pub mod pnl;
 pub mod fills;
 pub mod levels;
+pub mod markets;
 pub mod message;
 pub mod state;

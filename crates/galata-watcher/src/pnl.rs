@@ -61,17 +61,25 @@ pub fn due(config: &Config, sent: &Sent, now_ms: u64) -> Option<Slot> {
     if !config.pnl_summary {
         return None;
     }
-    let tz = TimeZone::get(&config.digest.zone).ok()?;
+    slot_due(&config.digest.zone, 30, sent, now_ms)
+}
+
+/// The slot due at `now_ms` for something sent every `every_min` minutes
+/// of the local hour, in `zone`: one that began less than [`GRACE_MS`] ago,
+/// outside quiet hours, and is not the one `sent` records. Shared with the
+/// market update, so both keep the same hours.
+pub fn slot_due(zone: &str, every_min: i8, sent: &Sent, now_ms: u64) -> Option<Slot> {
+    let tz = TimeZone::get(zone).ok()?;
     let local = Timestamp::from_millisecond(now_ms as i64).ok()?.to_zoned_datetime(tz);
     let (h, m) = (local.hour(), local.minute());
     if h >= QUIET_FROM || h < QUIET_UNTIL {
         return None;
     }
-    let into = (m % 30) as u64 * 60_000 + local.second() as u64 * 1000 + local.millisecond() as u64;
+    let into = (m % every_min) as u64 * 60_000 + local.second() as u64 * 1000 + local.millisecond() as u64;
     if into >= GRACE_MS {
         return None;
     }
-    let time = format!("{h:02}:{:02}", m - m % 30);
+    let time = format!("{h:02}:{:02}", m - m % every_min);
     let id = format!("{}T{time}", local.date());
     (sent.last_slot.as_deref() != Some(id.as_str())).then_some(Slot { id, time })
 }

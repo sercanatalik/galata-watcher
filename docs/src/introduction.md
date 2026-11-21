@@ -9,7 +9,7 @@ It sends a message when:
 - a position is liquidated, or comes within a set distance of liquidation;
 - a price crosses a level you set.
 
-It also sends a daily digest and, every half hour through the day, a PnL
+It also sends a daily digest, a market update every quarter of an hour and, every half hour through the day, a PnL
 summary. See [Alerts and summaries](alerts.md) for what each looks like.
 
 It only reads the account's public data. It holds no trading key and never

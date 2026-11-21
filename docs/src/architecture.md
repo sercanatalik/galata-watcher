@@ -9,6 +9,7 @@
   rule on run.failed x3 / run.completed --> galata-notify --liveness broken|ok
   cron digest time --> flow send-the-digest --> galata-watcher-poll --digest --> galata-notify
   cron :00 and :30 --> flow send-the-pnl-summary --> galata-watcher-poll --pnl --> galata-notify
+  cron every 15m --> flow send-the-market-update --> galata-watcher-poll --markets --> galata-notify
 ```
 
 **The PnL summary** gives the account's PnL over the venue's rolling 24h,
@@ -25,10 +26,16 @@ minutes:
 galata-watcher-poll --data var/data --pnl   # exit 3: no slot due
 ```
 
+**The market update** lists each market in the configuration's `watchlist`
+with its last price (the mid, or the mark where there is no mid) and its
+change over 24 hours, at :00, :15, :30 and :45, with the PnL summary's quiet
+hours, grace and once-per-slot record (`markets.json`). It asks the venue for
+market figures only, one question per dex.
+
 | Part | What it does |
 |---|---|
 | `crates/galata-watcher` | Library: config, state, fill classification, levels, near-liquidation, message text. All tested without a network. |
-| `crates/galata-watcher-poll` | One check of the account: prints new alerts, then saves state. `--digest` and `--pnl` make the daily digest and the half-hourly PnL summary instead. |
+| `crates/galata-watcher-poll` | One check of the account: prints new alerts, then saves state. `--digest`, `--pnl` and `--markets` make the daily digest, the half-hourly PnL summary and the quarter-hourly market update instead. |
 | `crates/galata-notify` | Sends one message to Telegram and records whether it was delivered. |
 | `crates/galata-watcher-api` | Reads and writes the configuration, and lists alerts and health over HTTP. |
 | `lane/` | The [cereyan](https://github.com/sercanatalik/cereyan) project that schedules the checks and turns alerts into messages. It only spawns the binaries above. |
