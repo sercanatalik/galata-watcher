@@ -4,7 +4,11 @@
 //!
 //! The plain rendering is the message's wording. The HTML rendering adds
 //! only emphasis, an icon and aligned tables, so the two never say
-//! different things. Every piece of text is escaped for HTML here, so a
+//! different things.
+//!
+//! A table is a quote block of monospaced lines, one `<code>` per row, not
+//! `<pre>`: Telegram draws a copy button over the corner of a `<pre>` block,
+//! which hides the figures of a narrow one. Every piece of text is escaped for HTML here, so a
 //! level's note or a market name can never break the markup.
 
 /// One stretch of a line.
@@ -29,8 +33,8 @@ enum Block {
     /// A section's name: `Open positions:` in plain text, bold in HTML.
     Heading(String),
     /// Rows of cells. Plain text joins a row's non-empty cells with one
-    /// space; HTML pads them into columns inside `<pre>`.
-    Table { rows: Vec<Vec<String>>, align: Vec<Align> },
+    /// space; HTML pads them into columns `gap` spaces apart.
+    Table { rows: Vec<Vec<String>>, align: Vec<Align>, gap: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -60,10 +64,17 @@ impl Message {
         self
     }
 
-    /// `align` names each column's alignment; a column past its end is left-aligned.
-    pub fn table(mut self, rows: Vec<Vec<String>>, align: &[Align]) -> Self {
+    /// `align` names each column's alignment; a column past its end is
+    /// left-aligned. Columns are two spaces apart.
+    pub fn table(self, rows: Vec<Vec<String>>, align: &[Align]) -> Self {
+        self.table_spaced(rows, align, 2)
+    }
+
+    /// A table whose columns are `gap` spaces apart, for rows that must fit
+    /// a phone's width.
+    pub fn table_spaced(mut self, rows: Vec<Vec<String>>, align: &[Align], gap: usize) -> Self {
         if !rows.is_empty() {
-            self.blocks.push(Block::Table { rows, align: align.to_vec() });
+            self.blocks.push(Block::Table { rows, align: align.to_vec(), gap });
         }
         self
     }
@@ -114,15 +125,21 @@ impl Message {
                     lines.push(line);
                 }
                 Block::Heading(name) => lines.push(format!("<b>{}</b>", escape(name))),
-                Block::Table { rows, align } => lines.push(format!("<pre>{}</pre>", escape(&columns(rows, align)))),
+                Block::Table { rows, align, gap } => {
+                    let rows: Vec<String> = columns(rows, align, *gap)
+                        .lines()
+                        .map(|row| format!("<code>{}</code>", escape(row)))
+                        .collect();
+                    lines.push(format!("<blockquote>{}</blockquote>", rows.join("\n")));
+                }
             }
         }
         lines.join("\n")
     }
 }
 
-/// Rows padded into columns, two spaces apart. Empty cells keep their column.
-fn columns(rows: &[Vec<String>], align: &[Align]) -> String {
+/// Rows padded into columns, `gap` spaces apart. Empty cells keep their column.
+fn columns(rows: &[Vec<String>], align: &[Align], gap: usize) -> String {
     let n = rows.iter().map(Vec::len).max().unwrap_or(0);
     let width = |c: usize| rows.iter().filter_map(|r| r.get(c)).map(|s| s.chars().count()).max().unwrap_or(0);
     let widths: Vec<usize> = (0..n).map(width).collect();
@@ -138,7 +155,7 @@ fn columns(rows: &[Vec<String>], align: &[Align]) -> String {
                     }
                 })
                 .collect();
-            cells.join("  ").trim_end().to_string()
+            cells.join(&" ".repeat(gap)).trim_end().to_string()
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -191,7 +208,8 @@ mod tests {
         assert_eq!(m.plain(), "Windows:\n24h +$1,235\nAll-time +$18,870\nClosed / other -$5");
         assert_eq!(
             m.html(),
-            "<b>Windows</b>\n<pre>24h              +$1,235\nAll-time        +$18,870\nClosed / other            -$5</pre>"
+            "<b>Windows</b>\n<blockquote><code>24h              +$1,235</code>\n\
+             <code>All-time        +$18,870</code>\n<code>Closed / other            -$5</code></blockquote>"
         );
     }
 

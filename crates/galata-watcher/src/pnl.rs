@@ -148,7 +148,8 @@ pub fn last_trades(fills: &[UserFill], n: usize) -> Vec<Trade> {
         .collect()
 }
 
-/// A trade's time in the digest's zone: `14:21` today, `19 Nov 14:21` before.
+/// A trade's time in the digest's zone, short enough for a phone: `14:21`
+/// today, `Fri 23:41` within the last six days, `13 Nov` before.
 pub fn trade_time(ms: u64, now_ms: u64, zone: &str) -> String {
     let Ok(tz) = TimeZone::get(zone) else {
         return crate::alert::utc(ms);
@@ -156,7 +157,8 @@ pub fn trade_time(ms: u64, now_ms: u64, zone: &str) -> String {
     let at = |ms: u64| Timestamp::from_millisecond(ms as i64).map(|t| t.to_zoned_datetime(tz.clone()));
     match (at(ms), at(now_ms)) {
         (Ok(t), Ok(now)) if t.date() == now.date() => t.strftime("%H:%M").to_string(),
-        (Ok(t), _) => t.strftime("%d %b %H:%M").to_string(),
+        (Ok(t), Ok(now)) if now.date().since(t.date()).is_ok_and(|d| d.get_days() < 7) => t.strftime("%a %H:%M").to_string(),
+        (Ok(t), _) => t.strftime("%d %b").to_string(),
         _ => crate::alert::utc(ms),
     }
 }
@@ -195,16 +197,14 @@ pub fn message(time: &str, windows: &Windows, positions: &[Position], pnl: &Hash
             .iter()
             .map(|(when, t)| {
                 let side = match t.side {
-                    Side::Buy => "bought",
-                    Side::Sell => "sold",
+                    Side::Buy => "B",
+                    Side::Sell => "S",
                 };
-                vec![when.clone(), t.market.clone(), side.into(), amount(t.size), "at".into(), amount(t.price)]
+                vec![when.clone(), t.market.clone(), side.into(), amount(t.size), format!("@{}", amount(t.price))]
             })
             .collect();
-        m = m.heading("Last trades").table(
-            rows,
-            &[Align::Left, Align::Left, Align::Left, Align::Right, Align::Left, Align::Right],
-        );
+        // One space apart, so a row fits a phone's width.
+        m = m.heading("Last trades").table_spaced(rows, &[Align::Left, Align::Left, Align::Left, Align::Right, Align::Left], 1);
     }
     m
 }
@@ -430,28 +430,29 @@ mod tests {
         let now = ms("2026-11-20T14:30:00Z");
         assert_eq!(trade_time(ms("2026-11-20T14:21:00Z"), now, "Europe/London"), "14:21");
         assert_eq!(trade_time(ms("2026-11-20T14:21:00Z"), now, "Europe/Istanbul"), "17:21");
-        assert_eq!(trade_time(ms("2026-11-19T09:05:00Z"), now, "Europe/London"), "19 Nov 09:05");
+        assert_eq!(trade_time(ms("2026-11-19T09:05:00Z"), now, "Europe/London"), "Thu 09:05");
+        assert_eq!(trade_time(ms("2026-11-13T09:05:00Z"), now, "Europe/London"), "13 Nov");
     }
 
     #[test]
     fn the_summary_ends_with_the_last_trades() {
         let trades = vec![
             ("14:21".to_string(), Trade { market: "BTC".into(), side: Side::Sell, size: d("0.05"), price: d("59300"), time_ms: 0 }),
-            ("19 Nov 09:05".to_string(), Trade { market: "ETH".into(), side: Side::Buy, size: d("1.2"), price: d("3012.5"), time_ms: 0 }),
+            ("Thu 09:05".to_string(), Trade { market: "ETH".into(), side: Side::Buy, size: d("1.2"), price: d("3012.5"), time_ms: 0 }),
         ];
         let m = message("14:30", &windows("1235", "-4102", "18870"), &[], &HashMap::new(), &trades);
         assert_eq!(
             m.plain(),
             "PnL summary, 14:30\n24h +$1,235\n30D -$4,102\nAll-time +$18,870\nNo open positions.\n\
-             Last trades:\n14:21 BTC sold 0.05 at 59,300\n19 Nov 09:05 ETH bought 1.2 at 3,012.5"
+             Last trades:\n14:21 BTC S 0.05 @59,300\nThu 09:05 ETH B 1.2 @3,012.5"
         );
         assert_eq!(
             m.html(),
             "📊 <b>PnL summary, 14:30</b>\n\
-             <pre>24h        +$1,235\n30D        -$4,102\nAll-time  +$18,870</pre>\n\
+             <blockquote><code>24h        +$1,235</code>\n<code>30D        -$4,102</code>\n<code>All-time  +$18,870</code></blockquote>\n\
              No open positions.\n\
              <b>Last trades</b>\n\
-             <pre>14:21         BTC  sold    0.05  at   59,300\n19 Nov 09:05  ETH  bought   1.2  at  3,012.5</pre>"
+             <blockquote><code>14:21     BTC S 0.05 @59,300</code>\n<code>Thu 09:05 ETH B  1.2 @3,012.5</code></blockquote>"
         );
     }
 

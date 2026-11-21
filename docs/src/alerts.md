@@ -32,15 +32,19 @@ it next runs, marked `[late: happened <time>]`.
 
 ## Daily digest
 
-Once a day at `digest.time` in `digest.zone`: each open position with its
-24-hour PnL, whether it has a stop-loss and a take-profit, and its distance
-from liquidation; the number of armed levels; and how many alerts went since
-the last digest.
+Once a day at `digest.time` in `digest.zone`: a table of open positions with
+their 24-hour PnL, whether a stop-loss (SL) and a take-profit (TP) rest, and
+the distance from liquidation; a warning naming every position without a
+stop-loss; the number of armed levels; and how many alerts went since the
+last digest.
 
 ```text
-Daily digest, 2026-11-20
-BTC long, 24h PnL +$120: stop-loss yes, take-profit no, 8.2% from liquidation
-ETH short, 24h PnL -$45: NO STOP-LOSS, take-profit yes, 21.0% from liquidation
+🗓 Daily digest, 2026-11-20
+Open positions
+                 24h  SL  TP   Liq
+BTC  long      +$120  ✓   ✗   8.2%
+ETH  short      -$45  ✗   ✓    21%
+⚠️ No stop-loss: ETH
 Armed call levels: 2
 Alerts since the last digest: 3
 ```
@@ -66,10 +70,14 @@ BTC             long   +$912
 ETH             short  -$140
 Closed / other         +$463
 Last trades
-14:21         BTC  sold    0.05  at  59,300
-13:02         ETH  sold       2  at   3,012
-19 Nov 09:05  BTC  bought   0.5  at  58,410
+14:21     BTC B 0.05 @59,300
+13:02     ETH S    2 @3,012
+Thu 09:05 BTC B  0.5 @58,410
 ```
+
+B is a buy and S a sell. Trade times are the time for today, the weekday
+within the last week, and the date before that.
+
 
 A slot is sent within ten minutes of its start or not at all, and never
 twice, even across a restart. `pnl_summary: false` turns it off.

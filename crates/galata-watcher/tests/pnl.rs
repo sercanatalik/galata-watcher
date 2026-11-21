@@ -76,8 +76,9 @@ async fn a_summary_is_made_once_per_slot() {
     let at = lines.iter().position(|l| *l == "Last trades:").expect("a trades section");
     assert_eq!(lines.len(), at + 4, "{}", a.text);
     let html = a.html.as_deref().expect("sent as HTML");
-    assert!(html.starts_with("📊 <b>PnL summary, 14:00</b>\n<pre>"), "{html}");
-    assert!(html.contains("<b>Last trades</b>\n<pre>"), "{html}");
+    assert!(html.starts_with("📊 <b>PnL summary, 14:00</b>\n<blockquote><code>"), "{html}");
+    assert!(!html.contains("<pre>"), "no copy button over the figures: {html}");
+    assert!(html.contains("<b>Last trades</b>\n<blockquote><code>"), "{html}");
 
     pnl::commit(&paths, &outcome).unwrap();
     let saved: Vec<Alert> = files::read_lines(&paths.alerts()).unwrap();

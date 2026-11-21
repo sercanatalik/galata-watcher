@@ -23,7 +23,7 @@ use crate::classify::trigger_kind;
 use crate::config::Config;
 use crate::daypnl::{day_pnl, usd};
 use crate::files::{self, Paths};
-use crate::message::{Message, bold, code, text as words};
+use crate::message::{Align, Message, bold, text as words};
 use crate::nearliq;
 use crate::state::State;
 
@@ -92,6 +92,10 @@ fn pct(d: Decimal) -> String {
 
 /// The digest. `pnl` is each position's 24-hour PNL by market; a market
 /// missing from it reads `n/a`.
+///
+/// Positions are a table: market, side, 24-hour PnL, whether a stop-loss
+/// and a take-profit rest (`✓` or `✗`), and the distance to liquidation.
+/// Positions without a stop-loss are then named again on a line of their own.
 pub fn message(
     date: &str,
     positions: &[Position],
@@ -102,28 +106,35 @@ pub fn message(
     undelivered: usize,
 ) -> Message {
     let cover = coverage(orders);
+    let mark = |yes: bool| if yes { "✓" } else { "✗" }.to_string();
     let mut m = Message::new().icon("🗓").line(vec![bold(format!("Daily digest, {date}"))]);
     if positions.is_empty() {
         m = m.line(vec![words("No open positions.")]);
-    }
-    for p in positions {
-        let side = if p.szi.is_sign_positive() { "long" } else { "short" };
-        let c = cover.get(&p.coin);
-        let stop = if c.is_some_and(|c| c.stop) { words("stop-loss yes") } else { bold("NO STOP-LOSS") };
-        let tp = if c.is_some_and(|c| c.take_profit) { "take-profit yes" } else { "take-profit no" };
-        let liq = match nearliq::distance(p) {
-            Some(d) => format!("{} from liquidation", pct(d.pct)),
-            None => "no liquidation price".into(),
-        };
-        let day = pnl.get(&p.coin).map_or("n/a".into(), |d| usd(*d));
-        m = m.line(vec![
-            bold(p.coin.clone()),
-            words(format!(" {side}, 24h PnL ")),
-            code(day),
-            words(": "),
-            stop,
-            words(format!(", {tp}, {liq}")),
-        ]);
+    } else {
+        let mut rows = vec![vec![String::new(), String::new(), "24h".into(), "SL".into(), "TP".into(), "Liq".into()]];
+        for p in positions {
+            let c = cover.get(&p.coin);
+            rows.push(vec![
+                p.coin.clone(),
+                if p.szi.is_sign_positive() { "long" } else { "short" }.into(),
+                pnl.get(&p.coin).map_or("n/a".into(), |d| usd(*d)),
+                mark(c.is_some_and(|c| c.stop)),
+                mark(c.is_some_and(|c| c.take_profit)),
+                nearliq::distance(p).map_or("–".into(), |d| pct(d.pct)),
+            ]);
+        }
+        m = m.heading("Open positions").table(
+            rows,
+            &[Align::Left, Align::Left, Align::Right, Align::Left, Align::Left, Align::Right],
+        );
+        let unstopped: Vec<&str> = positions
+            .iter()
+            .filter(|p| !cover.get(&p.coin).is_some_and(|c| c.stop))
+            .map(|p| p.coin.as_str())
+            .collect();
+        if !unstopped.is_empty() {
+            m = m.line(vec![words("⚠️ "), bold(format!("No stop-loss: {}", unstopped.join(", ")))]);
+        }
     }
     m = m.line(vec![words(format!("Armed call levels: {armed}"))]);
     if undelivered > 0 {
@@ -282,10 +293,38 @@ mod tests {
         assert_eq!(
             t,
             "Daily digest, 2026-11-19\n\
-             BTC long, 24h PnL +$1,235: stop-loss yes, take-profit no, 20% from liquidation\n\
-             ETH short, 24h PnL n/a: NO STOP-LOSS, take-profit no, 20% from liquidation\n\
+             Open positions:\n\
+             24h SL TP Liq\n\
+             BTC long +$1,235 ✓ ✗ 20%\n\
+             ETH short n/a ✗ ✗ 20%\n\
+             ⚠️ No stop-loss: ETH\n\
              Armed call levels: 2\n\
              Alerts since the last digest: 3 (1 not delivered)"
+        );
+    }
+
+    #[test]
+    fn the_digest_is_a_table_in_telegram() {
+        let pnl = HashMap::from([("BTC".to_string(), Decimal::new(123456, 2))]);
+        let m = message(
+            "2026-11-19",
+            &[position("BTC", "1", Some("80")), position("ETH", "-1", Some("120"))],
+            &pnl,
+            &[trigger("BTC", "Stop Market")],
+            2,
+            3,
+            0,
+        );
+        assert_eq!(
+            m.html(),
+            "🗓 <b>Daily digest, 2026-11-19</b>\n\
+             <b>Open positions</b>\n\
+             <blockquote><code>                24h  SL  TP  Liq</code>\n\
+             <code>BTC  long   +$1,235  ✓   ✗   20%</code>\n\
+             <code>ETH  short      n/a  ✗   ✗   20%</code></blockquote>\n\
+             ⚠️ <b>No stop-loss: ETH</b>\n\
+             Armed call levels: 2\n\
+             Alerts since the last digest: 3"
         );
     }
 
